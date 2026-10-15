@@ -78,13 +78,13 @@ button, input, select { font: inherit; color: inherit; }
 .rail-link:hover { border-color: var(--amber); box-shadow: 0 0 16px -4px var(--amber-glow); }
 
 /* ---------- layout ---------- */
-main { margin-left: var(--rail); padding: 34px clamp(18px, 4vw, 56px) 140px; max-width: 1480px; }
-header.top { display: grid; grid-template-columns: 1fr auto; gap: 18px 40px; align-items: end; margin-bottom: 30px; }
+main { margin-left: var(--rail); padding: 34px clamp(22px, 2.2vw, 48px) 140px; }
+header.top { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 18px clamp(28px, 4vw, 72px); align-items: end; margin-bottom: 28px; padding-bottom: 22px; border-bottom: 1px solid var(--line); }
 .eyebrow { font: 600 11px/1 var(--mono); letter-spacing: .32em; text-transform: uppercase; color: var(--amber); }
 h1 { font: 900 clamp(44px, 6vw, 84px)/.86 var(--display); text-transform: uppercase; letter-spacing: .01em; margin: 10px 0 0; }
 h1 span { color: transparent; -webkit-text-stroke: 1.5px var(--text); }
-.filemeta { text-align: right; display: grid; gap: 6px; justify-items: end; }
-.path-chip { font-size: 12px; color: var(--text); background: var(--well); border: 1px solid var(--line); padding: 7px 10px; border-radius: 3px; max-width: 520px; overflow-wrap: anywhere; }
+.filemeta { text-align: right; display: grid; gap: 6px; justify-items: end; max-width: min(540px, 100%); }
+.path-chip { font-size: 12px; color: var(--text); background: var(--well); border: 1px solid var(--line); padding: 7px 10px; border-radius: 3px; max-width: 100%; overflow-wrap: anywhere; }
 .badge { font: 700 10px/1 var(--mono); letter-spacing: .2em; text-transform: uppercase; padding: 5px 8px; border-radius: 2px; border: 1px solid currentColor; }
 .badge.new { color: var(--amber); } .badge.ok { color: var(--green); } .badge.bad { color: var(--red); }
 .note { font-size: 12px; color: var(--engrave); }

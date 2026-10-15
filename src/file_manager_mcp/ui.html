@@ -97,12 +97,30 @@
   /* ---------- dock ---------- */
   .dock {
     position: fixed; left: var(--rail); right: 0; bottom: 0; z-index: 20;
-    display: flex; align-items: center; gap: 18px; padding: 14px clamp(18px, 4vw, 56px);
+    display: flex; align-items: center; gap: 18px; padding: 14px clamp(22px, 2.2vw, 48px);
     background: rgba(13,12,11,.88); backdrop-filter: blur(10px); border-top: 1px solid var(--line);
   }
   .dock .msg { flex: 1; font-size: 13px; color: var(--engrave); min-height: 1.5em; }
   .dock .msg.err { color: #ffb0a5; } .dock .msg.ok { color: var(--green); } .dock .msg.dirty { color: var(--amber); }
   .dock .btn.primary { padding: 14px 22px; font-size: 12px; }
+
+  /* Wide rack: Network stays the tall center plate; the right bay is wider for the executor switch. */
+  @media (min-width: 1680px) {
+    .grid {
+      grid-template-columns: minmax(0, 1fr) minmax(0, 1.08fr) minmax(280px, 1.22fr);
+      grid-template-areas:
+        "roots net exec"
+        "remote net audit"
+        "tokens tokens tokens";
+    }
+    .m-roots { grid-area: roots; }
+    .m-net { grid-area: net; }
+    .m-exec { grid-area: exec; }
+    .m-remote { grid-area: remote; }
+    .m-audit { grid-area: audit; }
+    .m-tokens { grid-area: tokens; }
+    .tok-wrap { grid-template-columns: minmax(0, 1fr) minmax(340px, 440px); align-items: start; }
+  }
 
 </style>
 </head>
