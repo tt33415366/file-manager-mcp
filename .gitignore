@@ -1,0 +1,9 @@
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+dist/
+.superpowers/
+
+# Local draft PRD. Not part of the project.
+File manager mcp.md
