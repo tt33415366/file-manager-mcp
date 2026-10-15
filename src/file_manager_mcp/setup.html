@@ -1,0 +1,536 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>File Manager MCP · Setup Guide</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%23191816'/%3E%3Ccircle cx='16' cy='16' r='8' fill='%23ffb000'/%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Big+Shoulders+Display:wght@500;700;900&family=Big+Shoulders+Stencil+Display:wght@800&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/ui.css">
+<style>
+  [hidden] { display: none !important; }
+  .grid { display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); gap: 18px; }
+  .s-path, .s-client, .s-rule { grid-column: span 12; } .s-token { grid-column: span 5; } .s-config { grid-column: span 7; }
+  @media (max-width: 1100px) { .grid > * { grid-column: span 12 !important; } }
+  .rail nav button {
+    font: 800 15px/1 var(--stencil); color: var(--engrave); background: none; letter-spacing: .05em; cursor: pointer;
+    padding: 6px 10px; border: 1px solid transparent; border-radius: 3px;
+  }
+  .rail nav button:hover { color: var(--amber); border-color: var(--line-hi); }
+
+  /* header readout */
+  .readout { display: grid; gap: 8px; justify-items: end; min-width: min(560px, 100%); }
+  .readout .lcd { width: 100%; margin: 0; font-size: 15px; }
+  .chips { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
+  .chip { font: 600 10px/1 var(--mono); letter-spacing: .18em; text-transform: uppercase; padding: 6px 8px; border: 1px solid var(--line-hi); border-radius: 2px; color: var(--engrave); }
+  .chip b { color: var(--text); font-weight: 600; }
+  .chip.on b { color: var(--red); } .chip.zero { border-color: var(--red); } .chip.zero b { color: var(--red); }
+
+  /* path patch cards */
+  .patches { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 10px; margin-bottom: 18px; }
+  @media (max-width: 1100px) { .patches { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+  @media (max-width: 900px) { .patches { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+  .patch {
+    text-align: left; cursor: pointer; background: var(--well); border: 1px solid var(--line); border-radius: 3px; padding: 12px 14px 14px;
+    display: grid; gap: 6px; position: relative; transition: border-color .15s, background .15s;
+  }
+  .patch:hover { border-color: var(--line-hi); }
+  .patch .pn { font: 800 13px/1 var(--stencil); color: var(--engrave); letter-spacing: .1em; }
+  .patch .pt { font: 700 20px/1 var(--display); text-transform: uppercase; letter-spacing: .04em; }
+  .patch .pd { font-size: 11px; color: var(--engrave); line-height: 1.4; }
+  .patch::after { content: ""; position: absolute; top: 12px; right: 12px; width: 9px; height: 9px; border-radius: 50%; background: #3a3631; }
+  .patch[aria-checked="true"] { border-color: var(--amber); background: linear-gradient(180deg, rgba(255,176,0,.09), var(--well) 70%); }
+  .patch[aria-checked="true"] .pn { color: var(--amber); }
+  .patch[aria-checked="true"]::after { background: var(--amber); box-shadow: 0 0 10px var(--amber-glow); }
+
+  /* wiring diagram */
+  .wiring { background: #0b0a09; border: 1px solid var(--line); border-radius: 3px; padding: 6px; margin-bottom: 16px; box-shadow: inset 0 0 40px #000; }
+  .wiring svg { display: block; width: 100%; height: auto; }
+  .wiring .box { fill: #141311; stroke: var(--line-hi); stroke-width: 1.2; }
+  .wiring .node.hot .box { stroke: var(--amber); }
+  .wiring .node.dim { opacity: .28; }
+  .wiring .nt { font: 700 22px var(--display); letter-spacing: .06em; fill: var(--text); text-transform: uppercase; }
+  .wiring .ns { font: 500 12px var(--mono); fill: var(--engrave); }
+  .wiring .tag { font: 600 9px var(--mono); letter-spacing: .24em; fill: #8a6200; }
+  .wiring .wl { font: 600 10px var(--mono); fill: var(--amber); letter-spacing: .04em; }
+  .wiring .base { fill: none; stroke: #2a2724; stroke-width: 6; stroke-linecap: round; }
+  .wiring .flow { fill: none; stroke: var(--amber); stroke-width: 2.5; stroke-dasharray: 2 12; stroke-linecap: round; filter: drop-shadow(0 0 4px var(--amber-glow)); animation: flow .9s linear infinite; }
+  @keyframes flow { to { stroke-dashoffset: -28; } }
+  .wiring .off { display: none; }
+  .wiring .port { fill: #0b0a09; stroke: var(--line-hi); stroke-width: 1.5; }
+  .wiring .port.hot { stroke: var(--amber); fill: var(--amber-dim); }
+  .wiring[data-broken="true"] .flow.a { stroke: var(--red); animation: none; stroke-dasharray: 8 8; filter: none; }
+  .wiring .cut { stroke: var(--red); stroke-width: 3; display: none; }
+  .wiring[data-broken="true"] .cut { display: inline; }
+  .wiring[data-broken="true"] .wl.a { fill: var(--red); }
+
+  select {
+    width: 100%; background: var(--well); border: 1px solid var(--line); border-radius: 3px;
+    padding: 10px 12px; font-size: 13px; box-shadow: inset 0 2px 4px #0006;
+  }
+  select:focus { outline: none; border-color: var(--amber); }
+  .two { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  @media (max-width: 760px) { .two { grid-template-columns: 1fr; } }
+  .alerts { display: grid; gap: 6px; margin: 4px 0 14px; }
+  .alert { border-left: 3px solid var(--amber); background: rgba(255,176,0,.06); padding: 8px 12px; font-size: 12px; color: #ffd98a; }
+  .alert.bad { border-left-color: var(--red); background: rgba(255,75,56,.07); color: #ffc2b8; }
+  .alert code, .note code, .hint code { color: var(--text); }
+
+  /* client tabs */
+  .tabs { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); border: 1px solid var(--line-hi); border-radius: 3px; overflow: hidden; }
+  @media (max-width: 760px) { .tabs { grid-template-columns: 1fr 1fr; } }
+  .tabs button {
+    background: var(--well); border: 0; border-right: 1px solid var(--line); padding: 14px 14px 12px; cursor: pointer; text-align: left;
+    display: grid; gap: 4px; color: var(--engrave);
+  }
+  .tabs button:last-child { border-right: 0; }
+  .tabs button b { font: 700 19px/1 var(--display); text-transform: uppercase; letter-spacing: .04em; color: var(--text); }
+  .tabs button span { font-size: 11px; }
+  .tabs button[aria-selected="true"] { background: var(--amber); color: #3d2a00; }
+  .tabs button[aria-selected="true"] b { color: #1a1200; }
+  .tabs button:hover:not([aria-selected="true"]) b { color: var(--amber); }
+
+  /* code blocks */
+  .sub { font: 600 10px/1 var(--mono); letter-spacing: .2em; text-transform: uppercase; color: var(--engrave); margin: 18px 0 8px; }
+  .codehead { display: flex; align-items: center; gap: 10px; margin: 16px 0 6px; }
+  .codehead .sub { margin: 0; flex: 1; }
+  .codehead .btn { padding: 6px 10px; font-size: 10px; }
+  pre.code {
+    margin: 0; background: var(--well); border: 1px solid var(--line); border-left: 3px solid var(--amber-dim); border-radius: 3px;
+    padding: 12px 14px; font: 500 12.5px/1.6 var(--mono); color: #d8d1c2; white-space: pre-wrap; word-break: break-all;
+    box-shadow: inset 0 2px 6px #0007;
+  }
+  pre.code mark { background: none; padding: 0 1px; border-bottom: 1px dashed currentColor; }
+  mark.ph { color: var(--amber); }
+  mark.env { color: var(--green); border-bottom: 0 !important; }
+  mark.tok { color: #1a1200; background: var(--amber) !important; border: 0 !important; border-radius: 2px; padding: 0 3px !important; }
+  .lcd mark { background: none; color: inherit; border-bottom: 1px dashed currentColor; }
+  .note { margin: 8px 0 0; }
+
+  /* token ticket */
+  .issuer { display: grid; grid-template-columns: 1fr auto; gap: 8px; margin-top: 16px; }
+  .ticket { margin-top: 12px; border: 1px dashed var(--amber); border-radius: 3px; padding: 10px 12px; font-size: 12px; color: #ffd98a; background: rgba(255,176,0,.05); }
+  .ticket[hidden] { display: none; }
+  .ticket b { color: var(--amber); }
+  .err { color: #ffb0a5; font-size: 12px; margin-top: 8px; min-height: 1em; }
+</style>
+</head>
+<body>
+<aside class="rail">
+  <a class="rail-link" id="panelLink" href="/">Panel</a>
+  <nav aria-label="Steps">
+    <button type="button" data-go="path">01</button><button type="button" data-go="client">02</button><button type="button" data-go="token">03</button><button type="button" data-go="config">04</button><button type="button" data-go="rule">05</button>
+  </nav>
+  <div class="rail-title">Setup <b>Guide</b></div>
+</aside>
+
+<main>
+  <header class="top">
+    <div>
+      <div class="eyebrow">Local PC · Commissioning Sheet</div>
+      <h1>Setup <span>Guide</span></h1>
+    </div>
+    <div class="readout">
+      <div class="lcd" aria-live="polite"><small>MCP URL FOR THIS CLIENT</small><span id="url">—</span></div>
+      <div class="chips" id="chips"></div>
+    </div>
+    <div class="banner" id="loadError" hidden></div>
+  </header>
+
+  <div class="grid">
+    <section class="module s-path" id="path" style="--i:0">
+      <div class="screws"></div>
+      <div class="mhead"><span class="num">01</span><h2 class="mtitle">Connection Path</h2></div>
+      <p class="hint">How the Remote Agent's requests reach this PC. LAN direct needs the listener on 0.0.0.0; tunnels work with it on loopback.</p>
+      <div class="patches" role="radiogroup" aria-label="Connection path">
+        <button class="patch" type="button" role="radio" data-path="local"><span class="pn">A</span><span class="pt">This PC</span><span class="pd">Local testing: the client runs here.</span></button>
+        <button class="patch" type="button" role="radio" data-path="lan"><span class="pn">B</span><span class="pt">LAN</span><span class="pd">Another machine on the same network. Plain HTTP.</span></button>
+        <button class="patch" type="button" role="radio" data-path="ssh"><span class="pn">C</span><span class="pt">SSH -R</span><span class="pd">Reverse-forward the port to a Linux box you can ssh into.</span></button>
+        <button class="patch" type="button" role="radio" data-path="tailscale"><span class="pn">D</span><span class="pt">Tailscale</span><span class="pd">HTTPS on your tailnet; no public exposure.</span></button>
+        <button class="patch" type="button" role="radio" data-path="cloudflare"><span class="pn">E</span><span class="pt">Cloudflare Tunnel</span><span class="pd">Public HTTPS behind Cloudflare Access. Needed by Cursor Cloud Agents.</span></button>
+      </div>
+
+      <div class="wiring" id="wiring" data-broken="false">
+        <svg viewBox="0 0 960 230" role="img" aria-labelledby="wiringTitle">
+          <title id="wiringTitle">Connection diagram</title>
+          <path class="base direct" d="M140 75 C140 8, 820 8, 820 75"/>
+          <path class="flow direct" d="M140 75 C140 8, 820 8, 820 75"/>
+          <path class="base routed" d="M250 135 H370"/><path class="flow routed a" d="M250 135 H370"/>
+          <path class="base routed" d="M590 135 H710"/><path class="flow routed b" d="M590 135 H710"/>
+          <text class="wl routed a" id="wlA" x="310" y="118" text-anchor="middle"></text>
+          <text class="wl routed b" id="wlB" x="650" y="118" text-anchor="middle"></text>
+          <text class="wl direct" id="wlD" x="480" y="54" text-anchor="middle">loopback · http</text>
+          <g class="cut"><line x1="300" y1="122" x2="320" y2="148"/><line x1="320" y1="122" x2="300" y2="148"/></g>
+
+          <g class="node hot" id="nAgent">
+            <rect class="box" x="30" y="75" width="220" height="120" rx="4"/>
+            <text class="tag" x="46" y="98">REMOTE AGENT</text>
+            <text class="nt" id="agentT" x="46" y="132"></text>
+            <text class="ns" id="agentS" x="46" y="160"></text>
+          </g>
+          <g class="node" id="nLink">
+            <rect class="box" x="370" y="75" width="220" height="120" rx="4"/>
+            <text class="tag" x="386" y="98">LINK</text>
+            <text class="nt" id="linkT" x="386" y="132"></text>
+            <text class="ns" id="linkS" x="386" y="160"></text>
+          </g>
+          <g class="node hot" id="nPc">
+            <rect class="box" x="710" y="75" width="220" height="120" rx="4"/>
+            <text class="tag" x="726" y="98">LOCAL PC</text>
+            <text class="nt" x="726" y="132">File Manager</text>
+            <text class="ns" id="pcS" x="726" y="160"></text>
+          </g>
+          <circle class="port routed" cx="250" cy="135" r="6"/><circle class="port routed" cx="370" cy="135" r="6"/>
+          <circle class="port routed" cx="590" cy="135" r="6"/><circle class="port routed" cx="710" cy="135" r="6"/>
+          <circle class="port direct" cx="140" cy="75" r="6"/><circle class="port direct" cx="820" cy="75" r="6"/>
+        </svg>
+      </div>
+
+      <div class="two" id="pathInputs">
+        <label class="f" id="lanField"><span>LAN address of this PC</span><select id="lanIp"></select></label>
+        <label class="f" id="hostField"><span>Public hostname</span><input type="text" id="host" spellcheck="false"></label>
+        <label class="f" id="sshField"><span>Linux box (ssh target)</span><input type="text" id="sshTarget" spellcheck="false" value="user@linuxbox"></label>
+      </div>
+      <div class="alerts" id="pathAlerts"></div>
+      <div id="cmdWrap">
+        <div class="codehead"><div class="sub" id="cmdLabel">Run on this PC</div><button class="btn" type="button" data-copy="cmd">Copy</button></div>
+        <pre class="code" id="cmd"></pre>
+      </div>
+      <p class="note" id="pathNote"></p>
+    </section>
+
+    <section class="module s-client" id="client" style="--i:1">
+      <div class="screws"></div>
+      <div class="mhead"><span class="num">02</span><h2 class="mtitle">Client</h2></div>
+      <p class="hint">The MCP client the Remote Agent runs in.</p>
+      <div class="tabs" role="tablist" aria-label="Client">
+        <button type="button" role="tab" data-client="cursor"><b>Cursor</b><span>desktop app</span></button>
+        <button type="button" role="tab" data-client="cloud"><b>Cursor Cloud</b><span>Cloud Agents</span></button>
+        <button type="button" role="tab" data-client="codex"><b>Codex</b><span>CLI</span></button>
+        <button type="button" role="tab" data-client="agent"><b>cursor-agent</b><span>CLI</span></button>
+      </div>
+      <div class="alerts" id="clientAlerts" style="margin-top:14px"></div>
+    </section>
+
+    <section class="module s-token" id="token" style="--i:2">
+      <div class="screws"></div>
+      <div class="mhead"><span class="num">03</span><h2 class="mtitle">Token</h2></div>
+      <p class="hint" id="tokenHint"></p>
+      <div id="envWrap">
+        <div class="sub">Client machine</div>
+        <div class="seg" id="osSeg" role="group" aria-label="Client machine OS">
+          <button type="button" data-os="win">Windows</button><button type="button" data-os="nix">Linux / macOS</button>
+        </div>
+        <div class="codehead"><div class="sub" id="envLabel">Environment</div><button class="btn" type="button" data-copy="env">Copy</button></div>
+        <pre class="code" id="env"></pre>
+        <p class="note" id="envNote"></p>
+      </div>
+      <form class="issuer" id="issuer">
+        <input type="text" id="tokName" aria-label="Token name" spellcheck="false">
+        <button class="btn primary" type="submit">Issue token for this client</button>
+      </form>
+      <div class="err" id="tokErr" role="alert"></div>
+      <div class="ticket" id="ticket" hidden></div>
+    </section>
+
+    <section class="module s-config" id="config" style="--i:3">
+      <div class="screws"></div>
+      <div class="mhead"><span class="num">04</span><h2 class="mtitle">Client Config</h2></div>
+      <p class="hint" id="configHint"></p>
+      <div class="codehead"><div class="sub" id="configLabel"></div><button class="btn" type="button" data-copy="snippet">Copy</button></div>
+      <pre class="code" id="snippet"></pre>
+      <p class="note" id="configNote"></p>
+    </section>
+
+    <section class="module s-rule" id="rule" style="--i:4">
+      <div class="screws"></div>
+      <div class="mhead"><span class="num">05</span><h2 class="mtitle">Agent Rule</h2></div>
+      <p class="hint">Tells the Remote Agent how to use the tools. Generated from the running settings, so it only mentions the tools this server offers right now.</p>
+      <div class="codehead"><div class="sub" id="ruleLabel"></div><button class="btn" type="button" data-copy="ruleText">Copy</button></div>
+      <pre class="code" id="ruleText"></pre>
+    </section>
+  </div>
+</main>
+
+<div class="gate" id="gate" hidden>
+  <div><h2>No key</h2><p>Open the Setup guide from the Config UI URL printed by <code>file-manager-mcp</code> at startup.</p></div>
+</div>
+
+<script>
+(() => {
+  const key = new URLSearchParams(location.hash.slice(1)).get("k");
+  const $ = (id) => document.getElementById(id);
+  if (!key) { $("gate").hidden = false; return; }
+  $("panelLink").href = "/#k=" + encodeURIComponent(key);
+
+  const api = async (method, url, body) => {
+    const res = await fetch(url, {
+      method, headers: { "X-UI-Key": key, ...(body ? { "Content-Type": "application/json" } : {}) },
+      body: body ? JSON.stringify(body) : undefined,
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+    return data;
+  };
+
+  // Placeholders are wrapped as [[...]] (amber) and an issued token as {{...}}; both are stripped on copy.
+  const esc = (s) => s.replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
+  const plain = (s) => s.replace(/\[\[(.*?)\]\]/g, "<$1>").replace(/\{\{(.*?)\}\}/g, "$1");
+  const texts = {};
+  const paint = (id, s) => {
+    texts[id] = plain(s);
+    $(id).innerHTML = esc(s)
+      .replace(/\[\[(.*?)\]\]/g, '<mark class="ph">&lt;$1&gt;</mark>')
+      .replace(/\{\{(.*?)\}\}/g, '<mark class="tok">$1</mark>')
+      .replace(/\$\{env:([A-Z_]+)\}/g, '<mark class="env">${env:$1}</mark>');
+  };
+  const alerts = (id, list) => {
+    $(id).innerHTML = list.map(([level, html]) => `<div class="alert ${level}">${html}</div>`).join("");
+  };
+
+  const PATHS = {
+    local: { name: "Loopback", agent: "this PC" },
+    lan: { name: "LAN", agent: "LAN machine" },
+    ssh: { name: "SSH -R", agent: "linux box" },
+    tailscale: { name: "Tailscale", agent: "tailnet device" },
+    cloudflare: { name: "Cloudflare", agent: "anywhere" },
+  };
+  const CLIENTS = {
+    cursor: { name: "Cursor", tokName: "cursor-desktop" },
+    cloud: { name: "Cursor Cloud", tokName: "cursor-cloud" },
+    codex: { name: "Codex CLI", tokName: "codex" },
+    agent: { name: "cursor-agent", tokName: "cursor-agent" },
+  };
+  const S = { info: null, path: "local", client: "cursor", os: "win", osTouched: false, issued: null };
+
+  const hostOf = (url) => { try { return new URL(url).host; } catch { return ""; } };
+  const tunnelPath = () => S.path === "tailscale" || S.path === "cloudflare";
+  const host = () => $("host").value.trim().replace(/^https?:\/\//, "").replace(/\/.*$/, "");
+  const port = () => S.info.port;
+  const cf = () => S.path === "cloudflare";
+  const funnel = () => S.path === "tailscale" && S.client === "cloud";
+  const tokenRef = () => S.issued ? `{{${S.issued.token}}}` : "[[token]]";
+  const lanIp = () => $("lanIp").value;
+  const wildcard = () => S.info.listens_on_lan;
+  const lanCovered = () => wildcard() || S.info.listen_host === lanIp();
+  const reachable = () => (S.client !== "cloud" || tunnelPath()) && (S.path !== "lan" || lanCovered());
+
+  function mcpUrl() {
+    if (S.path === "local") return S.info.local_url + "/mcp";
+    if (S.path === "lan") return `http://${lanIp() || "[[lan ip]]"}:${port()}/mcp`;
+    if (S.path === "ssh") return `http://127.0.0.1:${port()}/mcp`;
+    return `https://${host() || "[[hostname]]"}/mcp`;
+  }
+
+  function renderPath() {
+    const i = S.info, h = host(), local = i.local_url, localHost = hostOf(local).replace(/:\d+$/, "");
+    document.querySelectorAll(".patch").forEach((b) => b.setAttribute("aria-checked", String(b.dataset.path === S.path)));
+    $("lanField").hidden = S.path !== "lan";
+    $("hostField").hidden = !tunnelPath();
+    $("sshField").hidden = S.path !== "ssh";
+    $("pathInputs").hidden = !tunnelPath() && S.path !== "ssh" && S.path !== "lan";
+    $("host").placeholder = S.path === "tailscale" ? "my-pc.tailnet-name.ts.net" : "fm.example.com";
+
+    let cmd = "", label = "Run on this PC", note = "";
+    if (S.path === "local") {
+      note = "For local testing: the client connects to the listener directly.";
+    } else if (S.path === "lan") {
+      label = "Optional · admin PowerShell on this PC";
+      cmd = `New-NetFirewallRule -DisplayName "File Manager MCP" -Direction Inbound -Protocol TCP -LocalPort ${port()} -Action Allow -Profile Private`;
+      note = "Opens the port to machines on private networks, if Windows Firewall blocks them. DUTs on other networks of this PC need no setup: the Agent passes for_host to prepare_download / prepare_upload.";
+    } else if (S.path === "ssh") {
+      const target = $("sshTarget").value.trim() || "[[user@linuxbox]]";
+      cmd = `ssh -N -o ExitOnForwardFailure=yes -o ServerAliveInterval=30 -R 127.0.0.1:${port()}:${localHost}:${port()} ${target}`;
+      note = `Keep it running. On the Linux box the server answers at http://127.0.0.1:${port()}/mcp.`;
+    } else if (S.path === "tailscale") {
+      cmd = `tailscale ${funnel() ? "funnel" : "serve"} --bg ${local}`;
+      note = funnel()
+        ? "Cursor Cloud Agents are not on your tailnet, so this uses Funnel (public HTTPS). Cloudflare Tunnel with Access is the stronger option."
+        : "Run Tailscale in unattended mode on Windows so the tunnel survives log-off. The hostname is this PC's MagicDNS name.";
+    } else {
+      const hn = h || "[[hostname]]";
+      cmd = `cloudflared tunnel login\ncloudflared tunnel create file-manager\ncloudflared tunnel route dns file-manager ${hn}\ncloudflared tunnel run --url ${local} file-manager`;
+      note = `Then in Cloudflare Zero Trust, add a self-hosted Access application for ${hn} with a Service Auth policy and create a service token. Its Client ID and Secret become the CF-Access headers. Avoid quick tunnels.`;
+    }
+    $("cmdWrap").hidden = !cmd;
+    $("cmdLabel").textContent = label;
+    paint("cmd", cmd);
+    $("pathNote").textContent = note;
+
+    const list = [];
+    if (S.path === "lan") {
+      if (!i.lan_ips.length) list.push(["bad", "This PC has no LAN IPv4 address right now."]);
+      else if (!lanCovered())
+        list.push(["bad", `The server listens on <code>${esc(i.listen_host)}</code> only, so LAN machines cannot connect: set Network → Listen host to <code>0.0.0.0</code> in the panel, save, and restart.`]);
+      list.push(["", "LAN direct is plain HTTP: the token and file contents cross the network unencrypted. Use it only on a network you trust; Tailscale gives the same reach over HTTPS."]);
+    }
+    if (tunnelPath()) {
+      if (!h) list.push(["", "Enter the public hostname the tunnel serves."]);
+      else {
+        const allowed = i.allowed_hosts.map((x) => x.toLowerCase());
+        if (!allowed.includes(h.toLowerCase()) && !allowed.includes(h.toLowerCase() + ":*"))
+          list.push(["bad", `The server rejects Host <code>${esc(h)}</code>: add it under Network → Extra allowed Host headers in the panel, save, and restart.`]);
+        if (i.public_base_url.replace(/\/+$/, "") !== "https://" + h)
+          list.push(["", `Set Network → Public base URL to <code>https://${esc(h)}</code> so File Channel links point through the tunnel (restart to apply).`]);
+      }
+    }
+    alerts("pathAlerts", list);
+  }
+
+  function renderDiagram() {
+    const w = $("wiring"), direct = S.path === "local";
+    w.dataset.broken = String(!reachable());
+    w.querySelectorAll(".direct").forEach((el) => el.classList.toggle("off", !direct));
+    w.querySelectorAll(".routed").forEach((el) => el.classList.toggle("off", direct));
+    w.querySelectorAll(".port").forEach((el) => el.classList.toggle("hot", reachable()));
+    $("nLink").classList.toggle("dim", direct);
+    $("nLink").classList.toggle("hot", !direct);
+    $("agentT").textContent = CLIENTS[S.client].name;
+    $("agentS").textContent = S.client === "cloud" ? "Cursor's servers" : PATHS[S.path].agent;
+    $("linkT").textContent = S.path === "tailscale" ? (funnel() ? "TS Funnel" : "TS Serve") : PATHS[S.path].name;
+    const h = host() || "<hostname>";
+    $("linkS").textContent = { local: "—", lan: "switch · wi-fi", ssh: `-R :${port()}`, tailscale: h, cloudflare: h }[S.path].slice(0, 26);
+    $("pcS").textContent = S.path === "lan" ? `${lanIp() || "<lan ip>"}:${port()}` : hostOf(S.info.local_url);
+    $("wlA").textContent = !reachable() ? "unreachable" : { lan: "plain http", ssh: `http 127.0.0.1:${port()}`, tailscale: "https · tailnet", cloudflare: "https + CF Access" }[S.path] || "";
+    $("wlB").textContent = { lan: lanCovered() ? "http · lan" : "not listening", ssh: "ssh tunnel", tailscale: "http · loopback", cloudflare: "http · loopback" }[S.path] || "";
+  }
+
+  function renderClient() {
+    document.querySelectorAll(".tabs button").forEach((b) => b.setAttribute("aria-selected", String(b.dataset.client === S.client)));
+    const list = [];
+    if (S.client === "cloud" && !tunnelPath())
+      list.push(["bad", "Cursor Cloud Agents run on Cursor's servers and cannot reach this PC over loopback, LAN, or SSH. Pick Cloudflare Tunnel (recommended) or Tailscale."]);
+    if (S.client === "agent" && S.path === "local")
+      list.push(["", "cursor-agent usually runs on a remote Linux box; pick LAN, SSH -R, or Tailscale if so."]);
+    alerts("clientAlerts", list);
+  }
+
+  function renderToken() {
+    const cloud = S.client === "cloud";
+    $("envWrap").hidden = cloud;
+    $("tokenHint").textContent = cloud
+      ? "Cursor Cloud Agents take header values directly, so the token goes into the dashboard fields in step 04."
+      : "Snippets read the token from FILE_MANAGER_TOKEN, so it never sits in a config file. Set it on the machine that runs the client.";
+    document.querySelectorAll("#osSeg button").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.os === S.os)));
+    const vars = [["FILE_MANAGER_TOKEN", tokenRef()]];
+    if (cf()) vars.push(["CF_ACCESS_CLIENT_ID", "[[client id]]"], ["CF_ACCESS_CLIENT_SECRET", "[[client secret]]"]);
+    const win = S.os === "win";
+    paint("env", vars.map(([k, v]) => win ? `setx ${k} "${v}"` : `export ${k}='${v}'`).join("\n"));
+    $("envLabel").textContent = win ? "PowerShell / cmd" : "Shell profile (~/.bashrc, ~/.zshrc)";
+    $("envNote").textContent = win
+      ? "setx only reaches new processes: restart Cursor or open a new terminal afterwards."
+      : "Add the lines to your shell profile so new shells and the client inherit them.";
+    const t = $("ticket");
+    t.hidden = !S.issued;
+    if (S.issued) t.innerHTML = `Token <b>${esc(S.issued.name)}</b> is filled into this page only. Copy it now: it is not stored in plain text and disappears when you leave. Revoke it in the panel's Access Tokens.`;
+  }
+
+  function renderConfig() {
+    const url = mcpUrl(), win = S.os === "win";
+    let label = "", snippet = "", hint = "", note = "";
+    if (S.client === "cloud") {
+      label = "Cursor dashboard · Cloud Agents · MCP (HTTP)";
+      hint = "Add an HTTP MCP server in the Cloud Agents settings of the Cursor dashboard, then the Runtime Secrets so File Channel curl commands can authenticate.";
+      const lines = ["Name     file-manager", `URL      ${url}`, `Header   Authorization: Bearer ${tokenRef()}`];
+      if (cf()) lines.push("Header   CF-Access-Client-Id: [[client id]]", "Header   CF-Access-Client-Secret: [[client secret]]");
+      lines.push("", "# Runtime Secrets", `FILE_MANAGER_TOKEN=${tokenRef()}`);
+      if (cf()) lines.push("CF_ACCESS_CLIENT_ID=[[client id]]", "CF_ACCESS_CLIENT_SECRET=[[client secret]]");
+      snippet = lines.join("\n");
+    } else if (S.client === "codex") {
+      label = win ? "%USERPROFILE%\\.codex\\config.toml" : "~/.codex/config.toml";
+      hint = "Codex reads the bearer token from the named environment variable.";
+      const lines = ["[mcp_servers.file_manager]", `url = "${url}"`, 'bearer_token_env_var = "FILE_MANAGER_TOKEN"'];
+      if (cf()) lines.push('env_http_headers = { "CF-Access-Client-Id" = "CF_ACCESS_CLIENT_ID", "CF-Access-Client-Secret" = "CF_ACCESS_CLIENT_SECRET" }');
+      snippet = lines.join("\n");
+      note = "Merge into the file if it already has other [mcp_servers.*] tables.";
+    } else {
+      label = S.client === "agent" || !win ? "~/.cursor/mcp.json" : "%USERPROFILE%\\.cursor\\mcp.json";
+      hint = S.client === "agent"
+        ? "cursor-agent reads the same mcp.json as Cursor, on the machine where it runs."
+        : "Global for all projects; a project's .cursor/mcp.json works too.";
+      const headers = { Authorization: "Bearer ${env:FILE_MANAGER_TOKEN}" };
+      if (cf()) Object.assign(headers, { "CF-Access-Client-Id": "${env:CF_ACCESS_CLIENT_ID}", "CF-Access-Client-Secret": "${env:CF_ACCESS_CLIENT_SECRET}" });
+      snippet = JSON.stringify({ mcpServers: { "file-manager": { url, headers } } }, null, 2);
+      note = "Merge into mcpServers if the file already lists other servers.";
+    }
+    $("configLabel").textContent = label;
+    $("configHint").textContent = hint;
+    paint("snippet", snippet);
+    $("configNote").textContent = note;
+  }
+
+  function renderRule() {
+    const codex = S.client === "codex";
+    $("ruleLabel").textContent = codex ? "Append to AGENTS.md in the project" : ".cursor/rules/file-manager.mdc in the project";
+    const head = codex ? "" : "---\ndescription: How to use the file-manager MCP server on the user's Local PC\nalwaysApply: true\n---\n\n";
+    paint("ruleText", head + S.info.agent_rule.trimEnd());
+  }
+
+  function renderHeader() {
+    const i = S.info;
+    paint("url", mcpUrl());
+    $("chips").innerHTML = [
+      `<span class="chip${i.roots ? "" : " zero"}">Roots <b>${i.roots}</b></span>`,
+      `<span class="chip${i.executor_enabled ? " on" : ""}">Executor <b>${i.executor_enabled ? "on" : "off"}</b></span>`,
+      `<span class="chip">Remote hosts <b>${i.remote_enabled ? "on" : "off"}</b></span>`,
+    ].join("");
+    if (!i.roots) {
+      const b = $("loadError");
+      b.hidden = false;
+      b.textContent = "No Allowed Roots yet: every file tool fails with NO_ALLOWED_ROOTS until you add one in the panel.";
+    }
+  }
+
+  function render() {
+    renderHeader(); renderPath(); renderDiagram(); renderClient(); renderToken(); renderConfig(); renderRule();
+  }
+
+  function setPath(p) {
+    S.path = p;
+    const pub = hostOf(S.info.public_base_url), ts = pub.endsWith(".ts.net");
+    if (tunnelPath()) $("host").value = (p === "tailscale") === ts ? pub : "";
+    if (!S.osTouched) S.os = p === "local" ? "win" : "nix";
+    render();
+  }
+
+  document.querySelectorAll(".patch").forEach((b) => b.onclick = () => setPath(b.dataset.path));
+  const setClient = (c) => { S.client = c; $("tokName").value = CLIENTS[c].tokName; render(); };
+  document.querySelectorAll(".tabs button").forEach((b) => b.onclick = () => setClient(b.dataset.client));
+  document.querySelectorAll("#osSeg button").forEach((b) => b.onclick = () => { S.os = b.dataset.os; S.osTouched = true; render(); });
+  $("host").oninput = render;
+  $("sshTarget").oninput = render;
+  $("lanIp").onchange = render;
+  document.querySelectorAll("[data-go]").forEach((b) => b.onclick = () => $(b.dataset.go).scrollIntoView({ behavior: "smooth", block: "start" }));
+  document.querySelectorAll("[data-copy]").forEach((b) => b.onclick = async () => {
+    await navigator.clipboard.writeText(texts[b.dataset.copy] || "");
+    b.textContent = "Copied"; setTimeout(() => { b.textContent = "Copy"; }, 1400);
+  });
+
+  $("issuer").onsubmit = async (e) => {
+    e.preventDefault();
+    $("tokErr").textContent = "";
+    try {
+      const r = await api("POST", "/api/tokens", { name: $("tokName").value.trim() });
+      S.issued = { name: r.name, token: r.token };
+      render();
+    } catch (err) {
+      $("tokErr").textContent = err.message;
+    }
+  };
+
+  api("GET", "/api/setup").then((info) => {
+    S.info = info;
+    $("tokName").value = CLIENTS[S.client].tokName;
+    $("lanIp").innerHTML = info.lan_ips.map((ip) => `<option${ip === info.lan_default ? " selected" : ""}>${esc(ip)}</option>`).join("");
+    $("lanIp").disabled = !info.lan_ips.length;
+    const pub = hostOf(info.public_base_url);
+    setPath(pub ? (pub.endsWith(".ts.net") ? "tailscale" : "cloudflare") : wildcard() ? "lan" : "local");
+  }).catch((err) => {
+    const b = $("loadError"); b.hidden = false; b.textContent = "Could not load running settings: " + err.message;
+  });
+})();
+</script>
+</body>
+</html>

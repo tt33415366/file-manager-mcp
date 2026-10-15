@@ -1,0 +1,445 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>File Manager MCP · Control Panel</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%23191816'/%3E%3Ccircle cx='16' cy='16' r='8' fill='%23ffb000'/%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Big+Shoulders+Display:wght@500;700;900&family=Big+Shoulders+Stencil+Display:wght@800&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/ui.css">
+<style>
+
+  /* list editor */
+  .list { display: grid; gap: 6px; margin-bottom: 10px; }
+  .item {
+    display: grid; grid-template-columns: 12px 1fr auto; align-items: center; gap: 12px;
+    background: var(--well); border: 1px solid var(--line); border-left: 3px solid var(--line-hi);
+    padding: 8px 8px 8px 12px; border-radius: 3px; animation: slot .25s ease-out;
+  }
+  @keyframes slot { from { opacity: 0; transform: translateX(-8px); } }
+  .item .v { font-size: 13px; overflow-wrap: anywhere; }
+  .item .dot { width: 9px; height: 9px; border-radius: 50%; background: #3a3631; }
+  .item[data-ok="true"] { border-left-color: var(--green); } .item[data-ok="true"] .dot { background: var(--green); box-shadow: 0 0 8px rgba(116,217,111,.6); }
+  .item[data-ok="false"] { border-left-color: var(--red); } .item[data-ok="false"] .dot { background: var(--red); box-shadow: 0 0 8px var(--red-glow); }
+  .item .x { cursor: pointer; background: none; border: 0; color: var(--engrave); font-size: 18px; line-height: 1; padding: 2px 8px; border-radius: 2px; }
+  .item .x:hover { color: var(--red); background: rgba(255,75,56,.08); }
+  .empty { font-size: 12px; color: #5d574e; border: 1px dashed var(--line); padding: 10px 12px; border-radius: 3px; }
+  .adder { display: grid; grid-template-columns: 1fr auto; gap: 8px; }
+  .sub { font: 600 10px/1 var(--mono); letter-spacing: .2em; text-transform: uppercase; color: var(--engrave); margin: 18px 0 8px; }
+
+  .rst {
+    display: inline-block; margin-left: 8px; padding: 3px 6px; vertical-align: middle; white-space: nowrap;
+    font: 600 9px/1 var(--mono); font-style: normal; letter-spacing: .08em; text-transform: none;
+    color: var(--amber); border: 1px dashed var(--amber); border-radius: 2px; background: rgba(255,176,0,.08);
+  }
+  .rst[hidden] { display: none; }
+
+  /* ---------- executor: safety cover ---------- */
+  .m-exec[data-armed="true"] { border-color: rgba(255,75,56,.6); box-shadow: 0 0 0 1px rgba(255,75,56,.25), 0 0 50px -20px var(--red-glow); }
+  .exec-body { display: grid; grid-template-columns: 210px 1fr; gap: 26px; align-items: start; }
+  @media (max-width: 640px) { .exec-body { grid-template-columns: 1fr; } }
+  .switch-bay { perspective: 700px; width: 190px; height: 150px; position: relative; margin-top: 18px; }
+  .bay-plate {
+    position: absolute; inset: 0; border-radius: 6px; background: #121110; border: 1px solid var(--line-hi);
+    display: grid; place-items: center; box-shadow: inset 0 4px 14px #000;
+  }
+  .toggle {
+    width: 74px; height: 116px; border-radius: 10px; border: 1px solid #000; cursor: pointer; position: relative;
+    background: linear-gradient(#0b0a09, #1a1816); box-shadow: inset 0 2px 8px #000, 0 1px 0 rgba(255,255,255,.05);
+  }
+  .toggle::before {
+    content: ""; position: absolute; left: 50%; width: 18px; height: 62px; margin-left: -9px; top: 8px; border-radius: 9px;
+    background: linear-gradient(90deg, #8d877d, #e8e2d6 45%, #6e695f); box-shadow: 0 6px 10px #000a;
+    transition: top .18s cubic-bezier(.3,1.6,.5,1);
+  }
+  .toggle[aria-checked="true"]::before { top: 46px; }
+  .toggle .t-on, .toggle .t-off { position: absolute; left: 0; right: 0; text-align: center; font: 700 9px/1 var(--mono); letter-spacing: .2em; }
+  .toggle .t-off { top: -16px; color: var(--engrave); } .toggle .t-on { bottom: -16px; color: var(--red); }
+  .cover {
+    position: absolute; inset: -6px; border-radius: 8px; transform-origin: 50% 0; cursor: pointer; border: 0; padding: 0;
+    background: repeating-linear-gradient(-45deg, var(--hazard) 0 14px, #141210 14px 28px);
+    box-shadow: 0 10px 24px #000c, inset 0 0 0 3px rgba(0,0,0,.35);
+    transition: transform .55s cubic-bezier(.25,1.4,.4,1), opacity .3s;
+    display: grid; place-items: center;
+  }
+  .cover span { background: #141210; color: var(--hazard); font: 800 13px/1 var(--display); letter-spacing: .2em; padding: 8px 10px; border: 1px solid var(--hazard); text-transform: uppercase; }
+  .switch-bay[data-open="true"] .cover { transform: rotateX(-100deg); opacity: .8; pointer-events: none; }
+  .switch-bay[data-open="false"] .toggle { pointer-events: none; }
+  .exec-status { font: 900 30px/1 var(--display); text-transform: uppercase; letter-spacing: .03em; margin-bottom: 6px; }
+  .exec-status.on { color: var(--red); text-shadow: 0 0 18px var(--red-glow); }
+  .risk { border-left: 3px solid var(--red); padding: 8px 12px; background: rgba(255,75,56,.06); color: #ffc2b8; font-size: 12px; margin: 10px 0 16px; }
+  .risk[hidden] { display: none; }
+
+  /* ---------- tokens ---------- */
+  .tok-wrap { display: grid; grid-template-columns: 1fr 380px; gap: 26px; }
+  @media (max-width: 900px) { .tok-wrap { grid-template-columns: 1fr; } }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th { text-align: left; font: 600 10px/1 var(--mono); letter-spacing: .2em; text-transform: uppercase; color: var(--engrave); padding: 0 10px 10px; border-bottom: 1px solid var(--line); }
+  td { padding: 10px; border-bottom: 1px dashed var(--line); }
+  td.when { color: var(--engrave); }
+  td.act { text-align: right; }
+  .receipt {
+    margin-top: 14px; background: #efe8d6; color: #1b1915; border-radius: 2px; padding: 16px 16px 20px; position: relative;
+    font: 500 12px/1.5 var(--mono); animation: print .5s steps(10) both;
+    -webkit-mask: radial-gradient(circle 6px at 50% 100%, transparent 98%, #000) 0 0 / 16px 100% repeat-x;
+            mask: radial-gradient(circle 6px at 50% 100%, transparent 98%, #000) 0 0 / 16px 100% repeat-x;
+  }
+  .receipt[hidden] { display: none; }
+  @keyframes print { from { clip-path: inset(0 0 100% 0); } to { clip-path: inset(0 0 0 0); } }
+  .receipt h4 { margin: 0 0 6px; font: 800 18px/1 var(--display); letter-spacing: .1em; text-transform: uppercase; }
+  .receipt code { display: block; word-break: break-all; background: #1b1915; color: #ffd36b; padding: 10px; border-radius: 2px; margin: 8px 0 10px; font-size: 12px; }
+  .receipt .btns { display: flex; gap: 8px; }
+  .receipt a { color: #1b1915; font-weight: 600; text-underline-offset: 3px; }
+  .receipt .btn { color: #1b1915; background: #e2d9c2; border-color: #1b1915; box-shadow: 0 2px 0 #1b1915; }
+
+  /* ---------- dock ---------- */
+  .dock {
+    position: fixed; left: var(--rail); right: 0; bottom: 0; z-index: 20;
+    display: flex; align-items: center; gap: 18px; padding: 14px clamp(18px, 4vw, 56px);
+    background: rgba(13,12,11,.88); backdrop-filter: blur(10px); border-top: 1px solid var(--line);
+  }
+  .dock .msg { flex: 1; font-size: 13px; color: var(--engrave); min-height: 1.5em; }
+  .dock .msg.err { color: #ffb0a5; } .dock .msg.ok { color: var(--green); } .dock .msg.dirty { color: var(--amber); }
+  .dock .btn.primary { padding: 14px 22px; font-size: 12px; }
+
+</style>
+</head>
+<body>
+<aside class="rail">
+  <div class="lamp" id="lamp" data-state="boot" title="Config state"></div>
+  <div class="lamp-label" id="lampLabel">Boot</div>
+  <nav aria-label="Modules">
+    <a href="#roots">01</a><a href="#net">02</a><a href="#exec">03</a><a href="#remote">04</a><a href="#audit">05</a><a href="#tokens">06</a>
+  </nav>
+  <a class="rail-link" id="setupLink" href="/setup">Setup</a>
+  <div class="rail-title">File&nbsp;Manager <b>MCP</b></div>
+</aside>
+
+<main>
+  <header class="top">
+    <div>
+      <div class="eyebrow">Local PC · Control Panel</div>
+      <h1>File Manager <span>MCP</span></h1>
+    </div>
+    <div class="filemeta">
+      <span class="badge new" id="fileBadge">—</span>
+      <div class="path-chip" id="pathChip">loading…</div>
+      <div class="note">Saving rewrites the file (comments are not kept) and applies it to the running server; Network and Audit Log changes need a restart.</div>
+    </div>
+    <div class="banner" id="loadError" hidden></div>
+  </header>
+
+  <div class="grid">
+    <section class="module m-roots" id="roots" style="--i:0">
+      <div class="screws"></div>
+      <div class="mhead"><span class="num">01</span><h2 class="mtitle">Allowed Roots</h2></div>
+      <p class="hint">The only directory trees Remote Agents can touch. Each must exist; the lamp checks it live.</p>
+      <div class="list" id="rootsList"></div>
+      <form class="adder" data-list="roots"><input type="text" placeholder="D:\Projects" aria-label="Add Allowed Root"><button class="btn" type="submit">Add root</button></form>
+    </section>
+
+    <section class="module m-net" id="net" style="--i:1">
+      <div class="screws"></div>
+      <div class="mhead"><span class="num">02</span><h2 class="mtitle">Network</h2></div>
+      <p class="hint">Where the server listens, and the public address tunnels expose.</p>
+      <div class="lcd" aria-live="polite"><small>MCP ENDPOINT</small><span id="endpoint">—</span></div>
+      <div class="row2">
+        <label class="f"><span>Listen host<em class="rst" data-rst="server.host" hidden>restart to apply</em></span><input type="text" id="host" placeholder="127.0.0.1"></label>
+        <label class="f"><span>Port<em class="rst" data-rst="server.port" hidden>restart to apply</em></span><input type="number" id="port" min="1" max="65535"></label>
+      </div>
+      <p class="warn" id="hostWarn" hidden>⚠ Listening beyond loopback: LAN clients and DUTs use plain HTTP. Tunnels only need 127.0.0.1.</p>
+      <label class="f"><span>Public base URL<em class="rst" data-rst="server.public_base_url" hidden>restart to apply</em></span><input type="text" id="publicBaseUrl" placeholder="https://fm.example.com"></label>
+      <div class="sub">Extra allowed Host headers<em class="rst" data-rst="server.allowed_hosts" hidden>restart to apply</em></div>
+      <div class="list" id="hostsList"></div>
+      <form class="adder" data-list="hosts"><input type="text" placeholder="fm.example.com" aria-label="Add allowed host"><button class="btn" type="submit">Add</button></form>
+      <div class="sub">Allowed origins<em class="rst" data-rst="server.allowed_origins" hidden>restart to apply</em></div>
+      <div class="list" id="originsList"></div>
+      <form class="adder" data-list="origins"><input type="text" placeholder="https://fm.example.com" aria-label="Add allowed origin"><button class="btn" type="submit">Add</button></form>
+    </section>
+
+    <section class="module m-exec" id="exec" style="--i:2" data-armed="false">
+      <div class="screws"></div>
+      <div class="mhead"><span class="num">03</span><h2 class="mtitle">Command Executor</h2></div>
+      <p class="hint">Lets Remote Agents run shell commands on this PC. Lift the cover to reach the switch.</p>
+      <div class="exec-body">
+        <div class="switch-bay" id="bay" data-open="false">
+          <div class="bay-plate">
+            <button class="toggle" id="execToggle" role="switch" aria-checked="false" aria-label="Command Executor" tabindex="-1">
+              <span class="t-off">SAFE</span><span class="t-on">ARMED</span>
+            </button>
+          </div>
+          <button class="cover" id="cover" aria-label="Lift safety cover"><span>Lift cover</span></button>
+        </div>
+        <div>
+          <div class="exec-status" id="execStatus">Disabled</div>
+          <div class="risk" id="risk" hidden>Remote Agents can run <b>any</b> command on this PC, unsandboxed, as you. Only enable this for agents you fully trust.</div>
+          <div class="sub">Shell</div>
+          <div class="seg" id="shellSeg" role="group" aria-label="Shell">
+            <button type="button" data-v="">Auto</button><button type="button" data-v="powershell">PowerShell</button><button type="button" data-v="pwsh">pwsh</button><button type="button" data-v="cmd">cmd</button><button type="button" data-v="sh">sh</button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="module m-remote" id="remote" style="--i:3">
+      <div class="screws"></div>
+      <div class="mhead"><span class="num">04</span><h2 class="mtitle">Remote Hosts</h2></div>
+      <p class="hint">Linux servers allowed for push_to_remote / pull_from_remote: ssh aliases from ~/.ssh/config or user@host. Empty disables both tools.</p>
+      <div class="list" id="remoteList"></div>
+      <form class="adder" data-list="remote"><input type="text" placeholder="buildbox" aria-label="Add Remote Host"><button class="btn" type="submit">Add host</button></form>
+    </section>
+
+    <section class="module m-audit" id="audit" style="--i:4">
+      <div class="screws"></div>
+      <div class="mhead"><span class="num">05</span><h2 class="mtitle">Audit Log</h2></div>
+      <p class="hint">One JSON line per request and tool call. Never records tokens or file content. Rotates at 10 MB × 5.</p>
+      <label class="f"><span>Audit file<em class="rst" data-rst="logging.audit_file" hidden>restart to apply</em></span><input type="text" id="auditFile" placeholder="default: %LOCALAPPDATA%\file-manager-mcp\logs\audit.log"></label>
+    </section>
+
+    <section class="module m-tokens" id="tokens" style="--i:5">
+      <div class="screws"></div>
+      <div class="mhead"><span class="num">06</span><h2 class="mtitle">Access Tokens</h2></div>
+      <p class="hint">One bearer token per client, so each can be revoked alone. Changes apply immediately.</p>
+      <div class="tok-wrap">
+        <div>
+          <table>
+            <thead><tr><th>Name</th><th>Issued</th><th></th></tr></thead>
+            <tbody id="tokBody"></tbody>
+          </table>
+          <div class="empty" id="tokEmpty" hidden>No tokens yet. Every MCP request is rejected until one exists.</div>
+        </div>
+        <div>
+          <form class="adder" id="tokForm"><input type="text" id="tokName" placeholder="cursor-cloud" aria-label="New token name"><button class="btn" type="submit">Issue token</button></form>
+          <div class="receipt" id="receipt" hidden>
+            <h4>Token issued</h4>
+            <div id="receiptName"></div>
+            <code id="receiptToken"></code>
+            <div>Shown once. Store it in your client now.</div>
+            <div class="btns" style="margin-top:10px"><button class="btn" type="button" id="copyTok">Copy</button><button class="btn" type="button" id="closeReceipt">Done</button></div>
+            <div id="receiptSnippet" hidden>
+              <div style="margin-top:14px">Paste into Cursor's mcp.json:</div>
+              <code id="receiptJson" style="white-space:pre-wrap"></code>
+              <div class="btns"><button class="btn" type="button" id="copyJson">Copy JSON</button></div>
+            </div>
+            <div style="margin-top:14px">Other clients or a tunnel? <a class="setup-link" href="/setup">Open the Setup guide →</a></div>
+          </div>
+        </div>
+      </div>
+    </section>
+  </div>
+</main>
+
+<div class="dock">
+  <div class="msg" id="msg" role="status" aria-live="polite">Loading configuration…</div>
+  <button class="btn ghost" id="discard" type="button" disabled>Discard</button>
+  <button class="btn primary" id="save" type="button" disabled>Commit to disk</button>
+</div>
+
+<div class="gate" id="gate" hidden>
+  <div><h2>No key</h2><p>Open the exact Config UI URL printed by <code>file-manager-mcp</code> at startup.</p></div>
+</div>
+
+<script>
+(() => {
+  const key = new URLSearchParams(location.hash.slice(1)).get("k");
+  const $ = (id) => document.getElementById(id);
+  if (!key) { $("gate").hidden = false; return; }
+  document.querySelectorAll("#setupLink, .setup-link").forEach((a) => { a.href = "/setup#k=" + encodeURIComponent(key); });
+
+  const api = async (method, url, body) => {
+    const res = await fetch(url, {
+      method, headers: { "X-UI-Key": key, ...(body ? { "Content-Type": "application/json" } : {}) },
+      body: body ? JSON.stringify(body) : undefined,
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+    return data;
+  };
+
+  let state = null, saved = "", lastError = "", onDisk = false, running = null, restartFields = [];
+
+  const lists = {
+    roots:   { el: $("rootsList"),   get: () => state.allowed_roots,           check: true,  empty: "No roots: Remote Agents get NO_ALLOWED_ROOTS until you add one." },
+    hosts:   { el: $("hostsList"),   get: () => state.server.allowed_hosts,    empty: "Loopback only." },
+    origins: { el: $("originsList"), get: () => state.server.allowed_origins,  empty: "No browser origins allowed." },
+    remote:  { el: $("remoteList"),  get: () => state.remote.allowed_hosts,    empty: "No Remote Hosts: transfer tools are off." },
+  };
+
+  function renderList(name) {
+    const spec = lists[name], items = spec.get();
+    spec.el.replaceChildren();
+    if (!items.length) {
+      const e = document.createElement("div"); e.className = "empty"; e.textContent = spec.empty; spec.el.append(e); return;
+    }
+    items.forEach((value, idx) => {
+      const row = document.createElement("div"); row.className = "item";
+      const dot = document.createElement("span"); dot.className = "dot";
+      const v = document.createElement("span"); v.className = "v"; v.textContent = value;
+      const x = document.createElement("button"); x.className = "x"; x.type = "button"; x.textContent = "×";
+      x.setAttribute("aria-label", `Remove ${value}`);
+      x.onclick = () => { items.splice(idx, 1); renderList(name); changed(); };
+      row.append(dot, v, x); spec.el.append(row);
+      if (spec.check) api("GET", "/api/check-dir?path=" + encodeURIComponent(value))
+        .then((r) => { row.dataset.ok = String(r.exists); dot.title = r.exists ? "Directory exists" : "Directory not found"; })
+        .catch(() => {});
+    });
+  }
+
+  document.querySelectorAll("form.adder[data-list]").forEach((form) => {
+    form.addEventListener("submit", (ev) => {
+      ev.preventDefault();
+      const input = form.querySelector("input"), value = input.value.trim(), items = lists[form.dataset.list].get();
+      if (value && !items.includes(value)) { items.push(value); renderList(form.dataset.list); changed(); }
+      input.value = ""; input.focus();
+    });
+  });
+
+  const bind = (id, read, write) => { const el = $(id); el.addEventListener("input", () => { write(el.value); changed(); }); return () => { el.value = read(); }; };
+  const binders = [
+    bind("host", () => state.server.host, (v) => state.server.host = v),
+    bind("port", () => state.server.port, (v) => state.server.port = v === "" ? 0 : Number(v)),
+    bind("publicBaseUrl", () => state.server.public_base_url, (v) => state.server.public_base_url = v.trim()),
+    bind("auditFile", () => state.logging.audit_file, (v) => state.logging.audit_file = v),
+  ];
+
+  function renderNet() {
+    const s = state.server, base = (s.public_base_url || `http://${s.host || "127.0.0.1"}:${s.port || "?"}`).replace(/\/+$/, "");
+    $("endpoint").textContent = base + "/mcp";
+    $("hostWarn").hidden = ["127.0.0.1", "localhost", "::1", ""].includes(s.host.trim());
+  }
+
+  const bay = $("bay"), toggle = $("execToggle");
+  $("cover").onclick = () => { bay.dataset.open = "true"; toggle.tabIndex = 0; toggle.focus(); };
+  bay.addEventListener("mouseleave", () => { if (!state.command_executor.enabled) closeCover(); });
+  function closeCover() { bay.dataset.open = "false"; toggle.tabIndex = -1; }
+  toggle.onclick = () => { state.command_executor.enabled = !state.command_executor.enabled; renderExec(); changed(); };
+  function renderExec() {
+    const on = state.command_executor.enabled;
+    toggle.setAttribute("aria-checked", String(on));
+    $("exec").dataset.armed = String(on);
+    $("execStatus").textContent = on ? "Armed" : "Disabled";
+    $("execStatus").classList.toggle("on", on);
+    $("risk").hidden = !on;
+    if (on) bay.dataset.open = "true";
+    $("shellSeg").querySelectorAll("button").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.v === state.command_executor.shell)));
+  }
+  $("shellSeg").addEventListener("click", (ev) => {
+    const b = ev.target.closest("button"); if (!b) return;
+    state.command_executor.shell = b.dataset.v; renderExec(); changed();
+  });
+
+  function setLamp(kind, label) { $("lamp").dataset.state = kind; $("lampLabel").textContent = label; }
+  function say(text, cls) { const m = $("msg"); m.textContent = text; m.className = "msg " + (cls || ""); }
+
+  function changed() {
+    renderNet();
+    const dirty = JSON.stringify(state) !== saved;
+    $("save").disabled = !dirty; $("discard").disabled = !dirty;
+    if (dirty) { setLamp("dirty", "Unsaved"); say("Unsaved changes.", "dirty"); }
+    else if (lastError) { setLamp("error", "Error"); }
+    else if (!onDisk) { setLamp("dirty", "New"); say("No config file yet. Fill in the modules and commit to create it.", "dirty"); }
+    else { setLamp("saved", "Saved"); say("In sync with disk.", ""); }
+  }
+
+  function renderAll() {
+    Object.keys(lists).forEach(renderList);
+    binders.forEach((b) => b());
+    if (!state.command_executor.enabled) closeCover();
+    renderExec(); renderNet(); changed();
+  }
+
+  function renderRestart() {
+    const disk = JSON.parse(saved);
+    document.querySelectorAll("[data-rst]").forEach((tag) => {
+      const [section, field] = tag.dataset.rst.split(".");
+      tag.hidden = !onDisk || !restartFields.includes(tag.dataset.rst)
+        || JSON.stringify(disk[section][field]) === JSON.stringify(running[section][field]);
+    });
+  }
+
+  async function load() {
+    const data = await api("GET", "/api/config");
+    state = data.config; saved = JSON.stringify(state); onDisk = data.exists && !data.error; running = data.running; restartFields = data.restart_fields;
+    renderRestart();
+    $("pathChip").textContent = data.path;
+    const badge = $("fileBadge");
+    if (data.error) { badge.textContent = "Invalid file"; badge.className = "badge bad"; }
+    else if (data.exists) { badge.textContent = "On disk"; badge.className = "badge ok"; }
+    else { badge.textContent = "New file"; badge.className = "badge new"; }
+    $("loadError").hidden = !data.error;
+    $("loadError").textContent = data.error ? `The existing file could not be loaded: ${data.error}. Saving will replace it.` : "";
+    renderAll();
+  }
+
+  $("discard").onclick = () => { state = JSON.parse(saved); lastError = ""; renderAll(); };
+  $("save").onclick = async () => {
+    $("save").disabled = true;
+    try {
+      const { restart_required } = await api("PUT", "/api/config", state);
+      saved = JSON.stringify(state); lastError = ""; onDisk = true;
+      $("fileBadge").textContent = "On disk"; $("fileBadge").className = "badge ok"; $("loadError").hidden = true;
+      renderRestart(); changed();
+      say(restart_required.length ? "Applied. Restart needed for: " + restart_required.join(", ") : "Applied.", "ok");
+    } catch (err) {
+      lastError = err.message; setLamp("error", "Rejected"); say(err.message, "err"); $("save").disabled = false;
+    }
+  };
+  addEventListener("keydown", (ev) => { if ((ev.ctrlKey || ev.metaKey) && ev.key === "s") { ev.preventDefault(); if (!$("save").disabled) $("save").click(); } });
+  addEventListener("beforeunload", (ev) => { if (state && JSON.stringify(state) !== saved) ev.preventDefault(); });
+
+  async function loadTokens() {
+    const { tokens } = await api("GET", "/api/tokens");
+    const body = $("tokBody"); body.replaceChildren();
+    $("tokEmpty").hidden = tokens.length > 0;
+    tokens.forEach((t) => {
+      const tr = document.createElement("tr");
+      const n = document.createElement("td"); n.textContent = t.name;
+      const w = document.createElement("td"); w.className = "when"; w.textContent = new Date(t.created).toLocaleString();
+      const a = document.createElement("td"); a.className = "act";
+      const b = document.createElement("button"); b.className = "btn ghost danger"; b.type = "button"; b.textContent = "Revoke";
+      let armed = false;
+      b.onclick = async () => {
+        if (!armed) { armed = true; b.textContent = "Confirm?"; setTimeout(() => { armed = false; b.textContent = "Revoke"; }, 3000); return; }
+        try { await api("DELETE", "/api/tokens/" + encodeURIComponent(t.name)); say(`Token “${t.name}” revoked.`, "ok"); loadTokens(); }
+        catch (err) { say(err.message, "err"); }
+      };
+      a.append(b); tr.append(n, w, a); body.append(tr);
+    });
+  }
+  function showReceipt(r) {
+    $("receiptName").textContent = "Client: " + r.name;
+    $("receiptToken").textContent = r.token;
+    $("receiptJson").textContent = r.mcp_url ? JSON.stringify(
+      { mcpServers: { "file-manager": { url: r.mcp_url, headers: { Authorization: "Bearer " + r.token } } } }, null, 2) : "";
+    $("receiptSnippet").hidden = !r.mcp_url;
+    const rc = $("receipt"); rc.hidden = true; void rc.offsetWidth; rc.hidden = false;
+  }
+  $("tokForm").addEventListener("submit", async (ev) => {
+    ev.preventDefault();
+    const name = $("tokName").value.trim(); if (!name) return;
+    try {
+      showReceipt(await api("POST", "/api/tokens", { name }));
+      $("tokName").value = ""; loadTokens();
+    } catch (err) { say(err.message, "err"); }
+  });
+  const copyFrom = (btnId, srcId) => {
+    $(btnId).onclick = async () => {
+      try { await navigator.clipboard.writeText($(srcId).textContent); $(btnId).textContent = "Copied"; }
+      catch { $(btnId).textContent = "Select & copy"; }
+    };
+  };
+  copyFrom("copyTok", "receiptToken");
+  copyFrom("copyJson", "receiptJson");
+  $("closeReceipt").onclick = () => {
+    $("receipt").hidden = true; $("receiptToken").textContent = ""; $("receiptJson").textContent = "";
+    $("copyTok").textContent = "Copy"; $("copyJson").textContent = "Copy JSON";
+  };
+
+  Promise.all([load(), loadTokens()]).catch((err) => { setLamp("error", "Error"); say(err.message, "err"); });
+  api("GET", "/api/startup-token").then((r) => { if (r.token) showReceipt(r); }).catch((err) => say(err.message, "err"));
+})();
+</script>
+</body>
+</html>
