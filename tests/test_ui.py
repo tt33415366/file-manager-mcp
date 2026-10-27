@@ -98,6 +98,9 @@ def test_setup_api_lists_lan_addresses_and_listener(client, runtime, interfaces)
     assert body["listen_host"] == "0.0.0.0"
     assert body["listens_on_lan"] is True
     assert "for_host" in body["agent_rule"]
+    rule = body["agent_rule"]
+    assert "64 MiB" in rule and "continuing from `offset`" in rule
+    assert "finished signed file's total" in rule
 
 
 def test_setup_agent_rule_follows_enabled_features(client, runtime):

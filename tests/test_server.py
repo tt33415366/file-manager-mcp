@@ -107,6 +107,10 @@ async def test_transfer_tools_tell_the_agent_about_for_host(root, tokens):
     for name in ("prepare_download", "prepare_upload"):
         assert "for_host" in tools[name].description
         assert {"for_host", "expires_in"} <= tools[name].input_schema["properties"].keys()
+    upload = tools["prepare_upload"].description
+    assert "64 MiB" in upload and "413" in upload
+    assert "finished signed file's total" in upload
+    assert "64 MiB" in instructions and "continuing from offset" in instructions
 
 
 @pytest.mark.anyio

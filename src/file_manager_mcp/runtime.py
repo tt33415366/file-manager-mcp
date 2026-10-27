@@ -35,7 +35,9 @@ INSTRUCTIONS = (
     "File Manager MCP: manage files on the user's Local PC. Paths are absolute Local PC paths inside the "
     "Allowed Roots; call list_roots first. read_text returns up to 256 KiB per call and write_text accepts up "
     "to 1 MiB; for larger or binary files call prepare_download / prepare_upload and use the File Channel "
-    "over HTTP with the same bearer token. To hand a file to or from a DUT (a device on another network of "
+    "over HTTP with the same bearer token. A file larger than max_chunk_bytes (64 MiB) goes up as successive "
+    "PUTs of at most that many bytes, each continuing from offset. max_bytes is the finished signed file's "
+    "total. To hand a file to or from a DUT (a device on another network of "
     "this PC), pass for_host to prepare_download / prepare_upload and run the returned curl on the DUT; it "
     "needs no token. Errors start with a code such as NOT_FOUND:. Long-running commands and transfers return "
     "status 'running' with a job_id; poll get_job."
@@ -70,10 +72,13 @@ DESCRIPTIONS = {
         "(a DUT's IP or hostname) the link is a tokenless Signed Link the DUT can curl, valid expires_in seconds."
     ),
     "prepare_upload": (
-        "Get File Channel URLs to upload a file of any size: PUT chunks (max_chunk_bytes) to upload_url&offset=N "
-        "starting at the returned offset, then POST complete_url (optionally &sha256=..). With for_host (a DUT's "
-        "IP or hostname) the links are a tokenless Signed Link for the DUT with overwrite and max_bytes fixed; "
-        "they stop working after the upload completes."
+        "Get File Channel URLs to upload a file of any size. Each PUT body must be at most "
+        "max_chunk_bytes (64 MiB); a larger body is HTTP 413. The sample curl is one chunk: "
+        "split a larger file and continue at upload_url&offset=N from the returned offset, "
+        "then POST complete_url (optionally &sha256=..). With for_host (a DUT's IP or hostname) "
+        "the links are a tokenless Signed Link for the DUT with overwrite and max_bytes fixed; "
+        "max_bytes is the finished signed file's total. "
+        "The links stop working after the upload completes."
     ),
     "run_command": (
         "Run a shell command on the Local PC (unsandboxed, as the user). Waits up to wait_sec (max 50); "

@@ -16,22 +16,22 @@ _RULE_HEAD = """\
 The `file-manager` MCP server manages files on the user's Local PC (Windows).
 
 - Call `list_roots` first. Every path is an absolute Local PC path inside an Allowed Root. \
-`NO_ALLOWED_ROOTS` means the operator has not added one yet: ask them instead of retrying.
+`NO_ALLOWED_ROOTS` means the operator has not added one yet: ask the operator to add one.
 - Errors start with a code (`NOT_FOUND:`, `OUTSIDE_ROOTS:`, `ALREADY_EXISTS:`, ...). Read the code before retrying.
 - `read_text` returns up to 256 KiB per call: continue from `offset + bytes_read` until `eof`. \
 `write_text` takes up to 1 MiB (`mode`: create, overwrite, append).
 - For larger or binary files call `prepare_download` / `prepare_upload` and run the returned `curl` \
-commands with the same bearer token.
+with the same bearer token. A file larger than `max_chunk_bytes` (64 MiB) goes up as successive PUTs \
+of at most that many bytes, each continuing from `offset`. `max_bytes` is the finished signed file's total.
 - To hand a file to a DUT (a device on another network of the Local PC), call `prepare_download` with \
 `for_host=<DUT IP>` and run the returned `curl` on the DUT: it needs no token and expires. `prepare_upload` \
 with `for_host` lets the DUT send a file back.
-- Prefer `search` (`name_glob`, `content_regex`) over walking `list_dir` page by page.
+- Find files with `search` (`name_glob`, `content_regex`).
 - `delete` is permanent; non-empty directories need `recursive=true`.
 """
 
 _RULE_TAIL = """\
-- Tools appear or disappear when the operator changes settings. If a tool is missing, list tools again \
-instead of guessing.
+- Tools appear or disappear when the operator changes settings. If a tool is missing, list tools again.
 """
 
 
