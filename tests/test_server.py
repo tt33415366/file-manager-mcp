@@ -78,13 +78,13 @@ async def test_default_server_exposes_only_file_tools(root, tokens):
 @pytest.mark.anyio
 async def test_executor_tools_registered_only_when_enabled(root, tokens):
     names = await tool_names(Runtime(make_config(root, executor=True), tokens).server)
-    assert names == FILE_TOOLS | {"run_command", "get_job", "cancel_job"}
+    assert names == FILE_TOOLS | {"run_command", "run_script", "get_job", "cancel_job", "prepare_job_log"}
 
 
 @pytest.mark.anyio
 async def test_remote_tools_registered_only_with_allowed_hosts(root, tokens):
     names = await tool_names(Runtime(make_config(root, remote_hosts=["buildbox"]), tokens).server)
-    assert names == FILE_TOOLS | {"push_to_remote", "pull_from_remote", "get_job", "cancel_job"}
+    assert names == FILE_TOOLS | {"push_to_remote", "pull_from_remote", "get_job", "cancel_job", "prepare_job_log"}
 
 
 @pytest.mark.anyio

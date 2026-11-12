@@ -109,6 +109,13 @@ def _print_summary(started: Started) -> None:
         print("WARNING: no Allowed Roots yet; add one in the config UI.", file=sys.stderr)
     if config.command_executor.enabled:
         print(EXECUTOR_WARNING, file=sys.stderr)
+    count, size, paths = started.runtime.jobs.retained_script_report()
+    if count:
+        print(
+            f"WARNING: {count} script director{'y' if count == 1 else 'ies'} ({size} bytes) of jobs whose process "
+            f"could not be confirmed gone were kept; delete them yourself when sure: {', '.join(map(str, paths))}",
+            file=sys.stderr,
+        )
     print("Press Ctrl+C to stop.", flush=True)
 
 
@@ -140,9 +147,9 @@ async def run(
     with mcp_listener as mcp_sock, socket.create_server(("127.0.0.1", 0)) as ui_sock:
         ui_port = ui_sock.getsockname()[1]
         audit_path = Path(config.logging.audit_file) if config.logging.audit_file else default_log_dir() / "audit.log"
-        audit = AuditLog(audit_path)
+        audit = AuditLog(audit_path, config.logging.audit_preview_chars)
         try:
-            runtime = Runtime(config, tokens, audit)
+            runtime = Runtime(config, tokens, audit, state_dir=audit_path.parent)
             key = secrets.token_urlsafe(16)
             servers = (_uvicorn(build_app(runtime)), _uvicorn(build_ui_app(runtime, key, ui_port)))
             tasks = [asyncio.create_task(s.serve(sockets=[sock])) for s, sock in zip(servers, (mcp_sock, ui_sock))]

@@ -30,6 +30,10 @@ allowed_hosts = []       # ssh aliases or user@host for push_to_remote / pull_fr
 
 [logging]
 audit_file = ""          # empty = default log directory
+audit_preview_chars = 0  # >0 also records that many leading characters of run_script's script and arguments
+
+[jobs]
+max_log_bytes = 2147483648   # disk limit for all Job Logs (2 GiB)
 """
 
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import re
@@ -18,21 +19,43 @@ from .auth import caller_of
 _CODE = re.compile(r"^[A-Z_]+(?=:)")
 
 
-def redact_args(args: dict[str, Any] | None) -> dict[str, Any]:
-    """Drop file content and env values; keep path-like arguments and the command string."""
+def _digest(value: Any, preview_chars: int) -> dict[str, Any]:
+    """Length (UTF-8 bytes) and SHA-256 of a string's UTF-8 bytes, plus a leading preview only when asked for."""
+    text = value if isinstance(value, str) else str(value)
+    data = text.encode("utf-8", errors="surrogatepass")
+    entry: dict[str, Any] = {"bytes": len(data), "sha256": hashlib.sha256(data).hexdigest()}
+    if preview_chars > 0:
+        entry["preview"] = text[:preview_chars]
+    return entry
+
+
+def redact_args(args: dict[str, Any] | None, preview_chars: int = 0) -> dict[str, Any]:
+    """Drop file content and env values; keep path-like arguments and the command string.
+
+    A run_script ``script`` and its ``arguments`` may hold secrets, so only their sizes and hashes are kept
+    (plus a leading preview when ``preview_chars`` is set).
+    """
     out: dict[str, Any] = {}
     for key, value in (args or {}).items():
         if key == "content":
             continue
         if key == "env":
             out[key] = sorted(value) if isinstance(value, dict) else []
-            continue
-        out[key] = value
+        elif key == "script":
+            digest = _digest(value, preview_chars)
+            out["script_bytes"], out["script_sha256"] = digest["bytes"], digest["sha256"]
+            if "preview" in digest:
+                out["script_preview"] = digest["preview"]
+        elif key == "arguments" and isinstance(value, list):
+            out[key] = [_digest(item, preview_chars) for item in value]
+        else:
+            out[key] = value
     return out
 
 
 class AuditLog:
-    def __init__(self, path: Path) -> None:
+    def __init__(self, path: Path, preview_chars: int = 0) -> None:
+        self.preview_chars = preview_chars
         path = Path(path)
         path.parent.mkdir(parents=True, exist_ok=True)
         self._handler = RotatingFileHandler(path, maxBytes=10 * 1024 * 1024, backupCount=5, encoding="utf-8")
@@ -72,7 +95,7 @@ def tool_audit_middleware(audit: AuditLog) -> Callable:
             "token": caller.audit_name if caller else None,
             "kind": "tool",
             "name": params.get("name"),
-            "args": redact_args(params.get("arguments")),
+            "args": redact_args(params.get("arguments"), audit.preview_chars),
         }
         start = time.monotonic()
         try:
@@ -114,7 +137,7 @@ class HttpAuditMiddleware:
                 token=caller.audit_name if caller else None,
                 kind="http",
                 name=f"{scope['method']} {scope['path']}",
-                args={"path": query["path"]} if "path" in query else {},
+                args={k: query[k] for k in ("path", "job", "stream") if k in query},
                 outcome=status["code"],
                 duration_ms=int((time.monotonic() - start) * 1000),
                 **({"client": client[0] if client else None} if caller and caller.link else {}),

@@ -23,6 +23,8 @@ class UploadRules(NamedTuple):
 
     overwrite: bool | None
     max_bytes: int | None
+    size: int | None = None
+    sha256: str | None = None
 
 
 @dataclass(frozen=True)
@@ -44,13 +46,19 @@ class Caller:
     def upload_rules(self) -> UploadRules:
         if self.link is None:
             return UploadRules(None, None)
-        return UploadRules(self.link.overwrite, self.link.max_bytes)
+        return UploadRules(self.link.overwrite, self.link.max_bytes, self.link.size, self.link.sha256)
 
 
 def caller_of(scope_or_request: Any) -> Caller | None:
     """The Caller attached to an ASGI scope, or to an object carrying one (a Starlette Request)."""
     scope = scope_or_request if isinstance(scope_or_request, dict) else getattr(scope_or_request, "scope", None)
     return (scope or {}).get("state", {}).get(_STATE_KEY)
+
+
+def caller_name(ctx: Any) -> str:
+    """The name of the Caller behind a tool call's Context, or "" when there is no HTTP request."""
+    caller = caller_of(getattr(ctx.request_context, "request", None)) if ctx is not None else None
+    return caller.name if caller is not None else ""
 
 
 async def _send_json(send: Callable, status: int, body: dict, headers: list[tuple[bytes, bytes]] = ()) -> None:

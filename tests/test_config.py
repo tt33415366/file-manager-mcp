@@ -141,7 +141,7 @@ def test_dump_then_load_round_trips(tmp_path, root):
 
 def test_config_to_dict_has_every_section(root):
     d = config_to_dict(config_from_dict({"allowed_roots": [str(root)]}))
-    assert set(d) == {"allowed_roots", "server", "command_executor", "remote", "logging"}
+    assert set(d) == {"allowed_roots", "server", "command_executor", "remote", "logging", "jobs"}
     assert d["server"]["port"] == 8765
 
 
@@ -171,3 +171,14 @@ def test_default_config_dir_elsewhere_uses_xdg(monkeypatch, tmp_path):
     monkeypatch.setattr("file_manager_mcp.config._is_windows", lambda: False)
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
     assert default_config_dir() == tmp_path / "file-manager-mcp"
+
+
+def test_job_log_settings_default_and_validate(write_config, root):
+    cfg = load_config(write_config(f"allowed_roots = [{toml_path(root)}]"))
+    assert cfg.logging.audit_preview_chars == 0
+    assert cfg.jobs.max_log_bytes == 2 * 1024**3
+    base = f"allowed_roots = [{toml_path(root)}]\n"
+    assert load_config(write_config(base + "[jobs]\nmax_log_bytes = 5\n[logging]\naudit_preview_chars = 8")).jobs.max_log_bytes == 5
+    for bad in ("[jobs]\nmax_log_bytes = 0", "[logging]\naudit_preview_chars = -1"):
+        with pytest.raises(ConfigError):
+            load_config(write_config(base + bad))

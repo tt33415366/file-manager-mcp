@@ -30,3 +30,24 @@ def test_redact_args_drops_content_and_env_values():
 
 def test_redact_args_handles_none():
     assert redact_args(None) == {}
+
+
+def test_redact_args_hashes_script_and_arguments_without_a_preview():
+    import hashlib
+
+    out = redact_args({"script": "secret \u4e2d", "arguments": ["tok", ""], "cwd": "C:\\x"})
+    data = "secret \u4e2d".encode("utf-8")
+    assert out["script_bytes"] == len(data) and out["script_sha256"] == hashlib.sha256(data).hexdigest()
+    assert out["arguments"][0] == {"bytes": 3, "sha256": hashlib.sha256(b"tok").hexdigest()}
+    assert out["arguments"][1]["bytes"] == 0
+    assert out["cwd"] == "C:\\x" and "script" not in out and "script_preview" not in out
+    assert "secret" not in json.dumps(out) and "tok" not in json.dumps(out["arguments"])
+
+
+def test_redact_args_preview_is_opt_in_and_limited():
+    out = redact_args({"script": "abcdef", "arguments": ["xyz123"]}, preview_chars=3)
+    assert out["script_preview"] == "abc" and out["arguments"][0]["preview"] == "xyz"
+
+
+def test_run_command_is_still_audited_in_full():
+    assert redact_args({"command": "echo secret"})["command"] == "echo secret"

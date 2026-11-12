@@ -22,7 +22,8 @@ The `file-manager` MCP server manages files on the user's Local PC (Windows).
 `write_text` takes up to 1 MiB (`mode`: create, overwrite, append).
 - For larger or binary files call `prepare_download` / `prepare_upload` and run the returned `curl` \
 with the same bearer token. A file larger than `max_chunk_bytes` (64 MiB) goes up as successive PUTs \
-of at most that many bytes, each continuing from `offset`. `max_bytes` is the finished signed file's total.
+of at most that many bytes, each continuing from `offset`; pass `size` to get ready-made `chunks`. \
+`max_bytes` is the finished signed file's total. For a finished job's full output call `prepare_job_log`.
 - To hand a file to a DUT (a device on another network of the Local PC), call `prepare_download` with \
 `for_host=<DUT IP>` and run the returned `curl` on the DUT: it needs no token and expires. `prepare_upload` \
 with `for_host` lets the DUT send a file back.

@@ -177,7 +177,8 @@ def test_get_returns_running_server_and_logging(client, root, tmp_path):
             "allowed_hosts": [],
             "allowed_origins": [],
         },
-        "logging": {"audit_file": ""},
+        "logging": {"audit_file": "", "audit_preview_chars": 0},
+        "jobs": {"max_log_bytes": 2 * 1024**3},
     }
     assert got["config"]["server"]["port"] == 9999
     assert got["config"]["logging"]["audit_file"] == str(tmp_path / "audit.jsonl")
@@ -191,12 +192,17 @@ def test_get_lists_the_fields_that_need_a_restart(client):
         "server.allowed_hosts",
         "server.allowed_origins",
         "logging.audit_file",
+        "logging.audit_preview_chars",
+        "jobs.max_log_bytes",
     ]
+
+
+TOML_ONLY_RESTART_FIELDS = {"logging.audit_preview_chars", "jobs.max_log_bytes"}  # not on the page
 
 
 def test_every_restart_tag_on_the_page_names_a_restart_field(client):
     tagged = set(re.findall(r'data-rst="([^"]+)"', client.get("/").text))
-    assert tagged == set(RESTART_FIELDS)
+    assert tagged == set(RESTART_FIELDS) - TOML_ONLY_RESTART_FIELDS
 
 
 @pytest.mark.anyio

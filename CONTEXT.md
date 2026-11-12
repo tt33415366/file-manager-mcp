@@ -41,8 +41,28 @@ The opt-in capability that runs shell commands (PowerShell on Windows) on the Lo
 _Avoid_: Terminal, remote shell, exec
 
 **Job**:
-A long-running process (a command or a remote transfer) that outlived its tool call's wait and is tracked by id until it exits or is cancelled.
+A long-running process (a command or a remote transfer) that outlived its tool call's wait and is tracked by id until it ends. Its metadata survives a server restart; a Job still running at a restart becomes Interrupted.
 _Avoid_: Task, background process, ticket
+
+**Interrupted**:
+The final state of a Job that was running when the server restarted, so its outcome is unknown and it has no exit code.
+_Avoid_: Lost, orphaned, crashed
+
+**Job Log**:
+The persisted stdout and stderr of a Job. It is bounded by capacity, truncation, and reclamation rules, so it is not guaranteed to be complete.
+_Avoid_: Output file, transcript
+
+**Output Cursor**:
+A position in one of a Job's output streams, counted in raw bytes, from which a caller resumes reading without receiving earlier output again.
+_Avoid_: Offset (alone), page token
+
+**Script**:
+Shell code the Command Executor runs from a temporary file rather than as a command-line string, so its text and arguments are not re-parsed by shells on the way.
+_Avoid_: Command (for this), payload
+
+**Chunk**:
+One contiguous byte range of a file sent in a single upload request, identified by its offset and length.
+_Avoid_: Part, block, slice
 
 **Remote Host**:
 A Linux server, named in the user's ssh configuration and allowlisted, that the Local PC pushes files to or pulls files from.

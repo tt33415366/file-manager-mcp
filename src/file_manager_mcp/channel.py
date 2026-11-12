@@ -14,13 +14,14 @@ from urllib.parse import quote, urlencode
 import anyio
 from mcp.server.mcpserver import Context
 from starlette.requests import Request
-from starlette.responses import FileResponse, JSONResponse, Response
+from starlette.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from starlette.routing import Route
 
 from .addressing import Addressing
-from .auth import UploadRules, caller_of
+from .auth import UploadRules, caller_name, caller_of
 from .errors import FileManagerError, from_os_error
 from .files import is_link, iso_time
+from .jobs import STREAMS, JobRegistry
 from .paths import PathPolicy
 from .signed import DOWNLOAD, UPLOAD, LinkSigner
 
@@ -29,6 +30,7 @@ PARTIAL_SUFFIX = ".fmcp-partial"
 DEFAULT_LINK_SECONDS = 3600
 MIN_LINK_SECONDS = 60
 MAX_LINK_SECONDS = 86400
+MAX_CHUNKS = 32
 
 _STATUS = {
     "INVALID_PATH": 400,
@@ -42,6 +44,10 @@ _STATUS = {
     "NOT_FOUND": 404,
     "ALREADY_EXISTS": 409,
     "OFFSET_MISMATCH": 409,
+    "SIZE_MISMATCH": 409,
+    "LOG_RECLAIMED": 410,
+    "JOB_NOT_FOUND": 404,
+    "LOG_PROTECTION_LIMIT": 429,
     "TOO_LARGE": 413,
     "DIGEST_MISMATCH": 422,
     "IO_ERROR": 500,
@@ -91,6 +97,15 @@ def _size(path: str) -> int:
         return 0
 
 
+def _query_size(request: Request) -> int | None:
+    raw = request.query_params.get("size")
+    if raw is None:
+        return None
+    if not (raw.isascii() and raw.isdigit()):
+        raise FileManagerError("INVALID_ARGUMENT", "query parameter 'size' must be a non-negative integer")
+    return int(raw)
+
+
 def _sha256(path: str) -> str:
     h = hashlib.sha256()
     with open(path, "rb") as f:
@@ -106,9 +121,36 @@ def _check_expires_in(expires_in: int) -> None:
         )
 
 
-def _caller(ctx: Context | None) -> str:
-    caller = caller_of(getattr(ctx.request_context, "request", None)) if ctx is not None else None
-    return caller.name if caller is not None else ""
+_caller = caller_name
+
+
+class _CountedStream(StreamingResponse):
+    """A response that keeps its Job's log from being reclaimed for as long as it is being sent."""
+
+    def __init__(self, job: Any, *args: Any, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        self._job = job
+
+    async def __call__(self, scope: Any, receive: Any, send: Any) -> None:
+        self._job.downloads += 1
+        try:
+            await super().__call__(scope, receive, send)
+        finally:
+            self._job.downloads -= 1
+
+
+def _chunk_curl(auth: str, url: str, offset: int, length: int) -> str:
+    """Upload bytes ``offset`` to ``offset + length`` of $LOCAL_FILE as one chunk.
+
+    ``head`` closing the pipe can SIGPIPE ``tail``, so pipefail is switched off inside a subshell, after probing
+    in another one whether the shell has it (``set`` is a special builtin: an error may end a non-interactive shell).
+    Success is curl's exit status plus the returned offset, not the pipeline's status.
+    """
+    return (
+        "( if (set +o pipefail) >/dev/null 2>&1; then set +o pipefail; fi; "
+        f'tail -c +{offset + 1} "$LOCAL_FILE" | head -c {length} | '
+        f'curl -fS -X PUT {auth}--data-binary @- "{url}" )'
+    )
 
 
 def _url(base: str, route: str, real: str, signed: dict[str, str] | None = None) -> str:
@@ -123,12 +165,18 @@ class FileChannel:
     """
 
     def __init__(
-        self, policy: PathPolicy, addressing: Addressing, signer: LinkSigner, max_chunk_bytes: int = MAX_CHUNK_BYTES
+        self,
+        policy: PathPolicy,
+        addressing: Addressing,
+        signer: LinkSigner,
+        max_chunk_bytes: int = MAX_CHUNK_BYTES,
+        jobs: JobRegistry | None = None,
     ) -> None:
         self.policy = policy
         self.addressing = addressing
         self.signer = signer
         self.max_chunk_bytes = max_chunk_bytes
+        self.jobs = jobs
         self._locks: weakref.WeakValueDictionary[str, asyncio.Lock] = weakref.WeakValueDictionary()
         self.routes = [
             Route("/files/download", _os_errors_as_json(self._download), methods=["GET"]),
@@ -136,6 +184,7 @@ class FileChannel:
             Route("/files/upload", _os_errors_as_json(self._upload_chunk), methods=["PUT"]),
             Route("/files/upload", _os_errors_as_json(self._upload_discard), methods=["DELETE"]),
             Route("/files/upload/complete", _os_errors_as_json(self._upload_complete), methods=["POST"]),
+            Route("/files/job-log", _os_errors_as_json(self._job_log), methods=["GET"]),
         ]
 
     @staticmethod
@@ -190,7 +239,9 @@ class FileChannel:
             current = _size(partial)
             if offset not in (0, current):
                 return _error(
-                    FileManagerError("OFFSET_MISMATCH", f"partial upload is at offset {current}"), offset=current
+                    FileManagerError("OFFSET_MISMATCH", f"partial upload is at offset {current}"),
+                    offset=current,
+                    expected_offset=current,
                 )
             limit = self.max_chunk_bytes
             too_large = FileManagerError("TOO_LARGE", f"chunk exceeds {limit} bytes")
@@ -238,11 +289,32 @@ class FileChannel:
             async with self._partial_lock(partial):
                 if not os.path.exists(partial):
                     raise FileManagerError("NOT_FOUND", f"no partial upload for {path!r}")
-                digest = await anyio.to_thread.run_sync(_sha256, partial)
-                expected = request.query_params.get("sha256")
-                if expected and expected.lower() != digest:
-                    raise FileManagerError("DIGEST_MISMATCH", f"sha256 is {digest}, expected {expected}")
                 rules = _upload_rules(request)
+                expected_size = rules.size if rules.size is not None else _query_size(request)
+                expected = rules.sha256 or request.query_params.get("sha256")
+                partial_size = _size(partial)
+                if expected_size is not None and partial_size != expected_size:
+                    too_short = partial_size < expected_size
+                    return _error(
+                        FileManagerError(
+                            "SIZE_MISMATCH",
+                            f"partial upload is {partial_size} bytes, expected {expected_size}"
+                            + ("; continue from offset" if too_short else "; reset it and upload again"),
+                        ),
+                        size=partial_size,
+                        expected_size=expected_size,
+                        offset=partial_size,
+                        reset_required=not too_short,
+                        reset=self._reset(request),
+                    )
+                digest = await anyio.to_thread.run_sync(_sha256, partial)
+                if expected and expected.lower() != digest:
+                    return _error(
+                        FileManagerError("DIGEST_MISMATCH", f"sha256 is {digest}, expected {expected}"),
+                        size=partial_size,
+                        reset_required=expected_size is not None,
+                        reset=self._reset(request),
+                    )
                 overwrite = rules.overwrite
                 if overwrite is None:
                     overwrite = request.query_params.get("overwrite", "false").lower() == "true"
@@ -261,6 +333,50 @@ class FileChannel:
         if caller is not None and caller.link is not None:
             self.signer.consume(caller.link)
         return JSONResponse({"path": path, "size": size, "sha256": digest})
+
+    async def _job_log(self, request: Request) -> Response:
+        """Serve the stored bytes of one Job stream, located by job id and stream name, never by path."""
+        try:
+            caller = caller_of(request)
+            if caller is not None and caller.link is not None:
+                raise FileManagerError("INVALID_LINK", "Job Logs are not available through Signed Links")
+            if self.jobs is None:
+                raise FileManagerError("JOB_NOT_FOUND", "this server has no jobs")
+            job = self.jobs.get(request.query_params.get("job", ""))
+            stream = request.query_params.get("stream", "")
+            if stream not in STREAMS:
+                raise FileManagerError("INVALID_ARGUMENT", "query parameter 'stream' must be stdout or stderr")
+            if job.log_reclaimed:
+                raise FileManagerError("LOG_RECLAIMED", "the job's log was reclaimed to free disk space")
+        except FileManagerError as exc:
+            return _error(exc)
+        log = job.stream(stream)
+        size, path = log.retained, log.path
+
+        async def body():
+            if not size:
+                return
+            remaining = size
+            with open(path, "rb") as f:
+                while remaining:
+                    chunk = await anyio.to_thread.run_sync(f.read, min(65536, remaining))
+                    if not chunk:
+                        break
+                    remaining -= len(chunk)
+                    yield chunk
+
+        return _CountedStream(
+            job,
+            body(),
+            media_type="application/octet-stream",
+            headers={"Content-Length": str(size), "Content-Disposition": f'attachment; filename="{stream}.log"'},
+        )
+
+    def _reset(self, request: Request) -> dict[str, str]:
+        """The DELETE that discards the partial, with the same credentials as ``request``."""
+        params = [(k, v) for k, v in request.query_params.multi_items() if k != "offset"]
+        base = self.addressing.link_base(request.headers.get("host"))
+        return {"method": "DELETE", "url": f"{base}/files/upload?{urlencode(params, quote_via=quote)}"}
 
     # tools
 
@@ -292,6 +408,29 @@ class FileChannel:
             "curl": f'curl -fSL -o {name} "{url}"',
         }
 
+    def prepare_job_log(
+        self,
+        job_id: str,
+        stream: str = "stdout",
+        expires_in: int = DEFAULT_LINK_SECONDS,
+        ctx: Context | None = None,
+    ) -> dict[str, Any]:
+        _check_expires_in(expires_in)
+        if self.jobs is None:
+            raise FileManagerError("JOB_NOT_FOUND", "this server has no jobs")
+        if stream not in STREAMS:
+            raise FileManagerError("INVALID_ARGUMENT", "stream must be stdout or stderr")
+        job = self.jobs.get(job_id)
+        self.jobs.protect(job, self.jobs.wall() + expires_in)
+        url = f"{self._base(ctx)}/files/job-log?{urlencode({'job': job.id, 'stream': stream})}"
+        return {
+            "url": url,
+            "size": job.stream(stream).retained,
+            "expires": iso_time(int(job.protect_until)),
+            "log_truncated": job.stream(stream).truncated,
+            "curl": f'curl -fSL -H "Authorization: Bearer $FILE_MANAGER_TOKEN" -o {stream}.log "{url}"',
+        }
+
     def prepare_upload(
         self,
         path: str,
@@ -299,32 +438,71 @@ class FileChannel:
         expires_in: int = DEFAULT_LINK_SECONDS,
         overwrite: bool = False,
         max_bytes: int | None = None,
+        size: int | None = None,
+        sha256: str | None = None,
         ctx: Context | None = None,
     ) -> dict[str, Any]:
         _check_expires_in(expires_in)
         if max_bytes is not None and (not for_host or max_bytes < 1):
             raise FileManagerError("INVALID_ARGUMENT", "max_bytes must be >= 1 and needs for_host")
+        if size is not None and (isinstance(size, bool) or size < 0):
+            raise FileManagerError("INVALID_ARGUMENT", "size must be >= 0")
+        if sha256 is not None:
+            sha256 = sha256.lower()
+            if len(sha256) != 64 or any(c not in "0123456789abcdef" for c in sha256):
+                raise FileManagerError("INVALID_ARGUMENT", "sha256 must be 64 hexadecimal characters")
+        if size is not None and max_bytes is not None and size > max_bytes:
+            raise FileManagerError("INVALID_ARGUMENT", f"size {size} exceeds max_bytes {max_bytes}")
         real = self.policy.file_target(path)
-        result: dict[str, Any] = {"offset": _size(_partial(real)), "max_chunk_bytes": self.max_chunk_bytes}
+        offset = _size(_partial(real))
+        if size is not None and size < offset:
+            raise FileManagerError(
+                "INVALID_ARGUMENT",
+                f"a partial upload of {offset} bytes already exceeds size {size}; "
+                "discard it with DELETE on the upload URL first",
+            )
+        result: dict[str, Any] = {"offset": offset, "max_chunk_bytes": self.max_chunk_bytes}
         if not for_host:
             base = self._base(ctx)
             upload_url = _url(base, "/files/upload", real)
-            complete_url = _url(base, "/files/upload/complete", real)
             auth = '-H "Authorization: Bearer $FILE_MANAGER_TOKEN" '
-            complete = f"{complete_url}&overwrite={'true' if overwrite else 'false'}"
+            expected = {"size": size, "sha256": sha256}
+            complete_url = _url(base, "/files/upload/complete", real) + f"&overwrite={str(overwrite).lower()}"
+            complete_url += "".join(f"&{k}={v}" for k, v in expected.items() if v is not None)
         else:
-            signed = self.signer.sign(UPLOAD, real, _caller(ctx), expires_in, overwrite, max_bytes)
+            signed = self.signer.sign(UPLOAD, real, _caller(ctx), expires_in, overwrite, max_bytes, size, sha256)
             base = self.addressing.dut_base(for_host)
             upload_url = _url(base, "/files/upload", real, signed)
-            complete_url = complete = _url(base, "/files/upload/complete", real, signed)
+            complete_url = _url(base, "/files/upload/complete", real, signed)
             auth = ""
             result["expires"] = iso_time(int(signed["exp"]))
-        return {
-            "upload_url": upload_url,
-            "complete_url": complete_url,
-            **result,
-            "curl": (
-                f'curl -fS -X PUT {auth}--data-binary @LOCAL_FILE "{upload_url}&offset=0" && '
-                f'curl -fS -X POST {auth}"{complete}"'
-            ),
+
+        def put(at: int, length: int) -> dict[str, Any]:
+            url = f"{upload_url}&offset={at}"
+            return {
+                "method": "PUT",
+                "url": url,
+                "offset": at,
+                "length": length,
+                "expect_offset": at + length,
+                "curl": _chunk_curl(auth, url, at, length),
+            }
+
+        end = offset + self.max_chunk_bytes if size is None else size
+        first = put(offset, min(self.max_chunk_bytes, end - offset))
+        result["upload_url"] = first["url"]
+        result["curl"] = first["curl"]
+        result["complete_url"] = complete_url
+        result["complete"] = {
+            "method": "POST",
+            "url": complete_url,
+            "curl": f'curl -fS -X POST {auth}"{complete_url}"',
         }
+        if size is not None:
+            starts = range(offset, size, self.max_chunk_bytes)
+            result["chunks"] = [put(at, min(self.max_chunk_bytes, size - at)) for at in starts[:MAX_CHUNKS]]
+            if size == 0:  # an empty file still needs one empty PUT to create its partial
+                result["chunks"] = [put(0, 0)]
+            if len(starts) > MAX_CHUNKS:
+                result["next_offset"] = starts[MAX_CHUNKS]
+        return result

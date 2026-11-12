@@ -114,3 +114,13 @@ def test_missing_or_garbled_fields_fail(signer):
     query = download_query(signer)
     assert signer.verify(DOWNLOAD, {k: v for k, v in query.items() if k != "exp"}) is None
     assert signer.verify(DOWNLOAD, {**query, "exp": "soon"}) is None
+
+
+def test_upload_link_signs_size_and_sha256(signer):
+    path, digest = r"D:\root\up.bin", "a" * 64
+    query = {"path": path, **signer.sign(UPLOAD, path, "laptop", 600, size=5, sha256=digest)}
+    grant = signer.verify(UPLOAD, query)
+    assert (grant.size, grant.sha256) == (5, digest)
+    assert signer.verify(UPLOAD, {**query, "size": "6"}) is None
+    assert signer.verify(UPLOAD, {**query, "sha256": "b" * 64}) is None
+    assert signer.verify(UPLOAD, {k: v for k, v in query.items() if k != "size"}) is None

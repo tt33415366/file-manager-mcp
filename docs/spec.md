@@ -38,7 +38,13 @@ allowed_hosts = []
 
 [logging]
 audit_file = ""
+audit_preview_chars = 0   # 0 = audit only the length and SHA-256 of run_script's script and arguments
+
+[jobs]
+max_log_bytes = 2147483648   # disk budget for all Job Logs (ADR 0004)
 ```
+
+`audit_preview_chars` and `jobs.max_log_bytes` are TOML-only (not shown in the config UI); both need a restart. Both are ≥ 0 / ≥ 1 respectively.
 
 `tokens.json`: `{"tokens": [{"name": "...", "sha256": "<hex>", "created": "<ISO 8601>"}]}`.
 
@@ -65,7 +71,7 @@ With no Allowed Roots configured, every path → `NO_ALLOWED_ROOTS` (checked fir
 
 ## 5. MCP tools
 
-Errors are MCP tool errors (`isError: true`) whose text begins with a code: `NO_ALLOWED_ROOTS`, `OUTSIDE_ROOTS`, `NOT_FOUND`, `ALREADY_EXISTS`, `NOT_A_FILE`, `NOT_A_DIRECTORY`, `DIRECTORY_NOT_EMPTY`, `TOO_LARGE`, `NOT_TEXT`, `INVALID_PATH`, `INVALID_ARGUMENT`, `HOST_NOT_ALLOWED`, `JOB_NOT_FOUND`, `PERMISSION_DENIED`, `IO_ERROR`. An unexpected OS error maps by type: file not found → `NOT_FOUND`, exists → `ALREADY_EXISTS`, is a directory → `NOT_A_FILE`, not a directory → `NOT_A_DIRECTORY`, permission (incl. a file locked by another process) → `PERMISSION_DENIED`, any other → `IO_ERROR`. Results are structured JSON objects.
+Errors are MCP tool errors (`isError: true`) whose text begins with a code: `NO_ALLOWED_ROOTS`, `OUTSIDE_ROOTS`, `NOT_FOUND`, `ALREADY_EXISTS`, `NOT_A_FILE`, `NOT_A_DIRECTORY`, `DIRECTORY_NOT_EMPTY`, `TOO_LARGE`, `NOT_TEXT`, `INVALID_PATH`, `INVALID_ARGUMENT`, `HOST_NOT_ALLOWED`, `JOB_NOT_FOUND`, `LOG_RECLAIMED`, `LOG_PROTECTION_LIMIT`, `PERMISSION_DENIED`, `IO_ERROR`. An unexpected OS error maps by type: file not found → `NOT_FOUND`, exists → `ALREADY_EXISTS`, is a directory → `NOT_A_FILE`, not a directory → `NOT_A_DIRECTORY`, permission (incl. a file locked by another process) → `PERMISSION_DENIED`, any other → `IO_ERROR`. Results are structured JSON objects.
 
 ### 5.1 File tools (006) — always registered
 
@@ -95,7 +101,8 @@ Errors are MCP tool errors (`isError: true`) whose text begins with a code: `NO_
 
 - `prepare_download(path, for_host="", expires_in=3600)` → `{url, size, modified, curl}`, plus `expires` with `for_host`; path must be an existing file.
 - `for_host` (DUT IP or hostname) makes a Signed Link: the server resolves it to IPv4, takes the local address the OS routes to it, and builds the link on `http://<that address>:<server.port>`; its `curl` has no `Authorization` header. `INVALID_ARGUMENT` when it does not resolve, has no route, routes to loopback (this PC), routes from an address that is not an own interface IP (e.g. link-local), or the listener does not cover that address (`server.host` neither `0.0.0.0`/empty nor equal to it). `expires_in` must be 60–86400.
-- `prepare_upload(path, for_host="", expires_in=3600, overwrite=False, max_bytes=None)` → `{upload_url, complete_url, offset, max_chunk_bytes, curl}`, plus `expires` with `for_host`; parent directory must exist. `max_chunk_bytes` is 64 MiB (67108864). Each `PUT` body must be at most that many bytes; a larger body is HTTP 413 `TOO_LARGE`. The `curl` example is one chunk and only succeeds when the file fits in one chunk; a larger file is split and resumed at `offset`. `overwrite` is used in the `curl` example, and in a Signed Link it is fixed. `max_bytes` (≥ 1) needs `for_host` and is the finished upload's total. The per-request limit stays `max_chunk_bytes`. Omitting `max_bytes` sets no total-size cap.
+- `prepare_upload(path, for_host="", expires_in=3600, overwrite=False, max_bytes=None, size=None, sha256=None)` → `{upload_url, complete_url, complete, offset, next_offset, max_chunk_bytes, curl}`, plus `expires` with `for_host`, plus `chunks` when `size` is given; parent directory must exist. `upload_url` already carries `offset=N` (the current partial size), so it is one PUT as returned. `complete` is `{method, url}` for the finishing POST (with `sha256` and `size` when given). `max_chunk_bytes` is 64 MiB (67108864). Each `PUT` body must be at most that many bytes; a larger body is HTTP 413 `TOO_LARGE`. The `curl` example is the first chunk only; a larger file is split and resumed at `offset`. With `size` (≥ 0), `chunks` lists `[{method, url, offset, length}]` (at most 32 chunks, else `INVALID_ARGUMENT`; `size` > `max_bytes` → `INVALID_ARGUMENT`). `size` and `sha256` (64 hex characters) are verified when the upload completes; in a Signed Link they are signed. `overwrite` is used in the `curl` example, and in a Signed Link it is fixed. `max_bytes` (≥ 1) needs `for_host` and is the finished upload's total. The per-request limit stays `max_chunk_bytes`. Omitting `max_bytes` sets no total-size cap.
+- `prepare_job_log(job_id, stream="stdout", expires_in=3600)` → `{url, size, expires, log_truncated, curl}`: a bearer URL (`GET /files/job-log?job=J&stream=S`, no `for_host`, never a Signed Link) for one stream's stored bytes. It needs the same authorization as `get_job`, protects the log from reclaiming until `expires` (ADR 0004), and fails with `LOG_PROTECTION_LIMIT` when protected logs would exceed half of `jobs.max_log_bytes`, `LOG_RECLAIMED` when the log is gone. `expires_in` must be 60–86400. Registered together with `get_job`.
 - Base URL: `server.public_base_url` without trailing `/` if set, else `http://<host>:<port>`, where a wildcard host (`0.0.0.0`, `::`, empty) becomes `127.0.0.1` and an IPv6 literal is bracketed. The startup summary and the config UI token receipt use the same base URL. `curl` examples use `$FILE_MANAGER_TOKEN`.
 - Link base (ADR 0003): `server.public_base_url` if set; else `http://<Host header of the MCP request>` (already validated, section 3), so links work over the Connection Path the Remote Agent used; else (no HTTP request) the base URL above.
 
@@ -106,25 +113,29 @@ Errors are MCP tool errors (`isError: true`) whose text begins with a code: `NO_
 | `GET /files/download?path=P` | streams P with `Range`/`If-Range` support; 400 directory/invalid, 403 outside roots or no Allowed Roots (`NO_ALLOWED_ROOTS`, every route), 404 missing |
 | `GET /files/upload?path=P` | `{"offset": size of P.fmcp-partial or 0}` |
 | `PUT /files/upload?path=P&offset=N` | `N=0` truncates/creates `P.fmcp-partial`; else `N` must equal its size (409 `{"error": "OFFSET_MISMATCH", "message", "offset": size}`); body > 64 MiB → 413 `TOO_LARGE` (`chunk exceeds ...`); the per-request cap stays 64 MiB when signed `max_bytes` is larger or omitted; returns `{"offset": new size}` |
-| `POST /files/upload/complete?path=P&overwrite=false&sha256=H` | no partial → 404; digest mismatch → 422 (partial kept); existing P without overwrite → 409; else `os.replace` → `{"path", "size", "sha256"}` |
+| `POST /files/upload/complete?path=P&overwrite=false&sha256=H&size=N` | no partial → 404; size mismatch → 409 `SIZE_MISMATCH` (checked first); digest mismatch → 422 `DIGEST_MISMATCH` (partial kept); existing P without overwrite → 409; else `os.replace` → `{"path", "size", "sha256"}`. A mismatch body carries `size`, `expected_size`, `offset`, `reset_required` and `reset` (the `DELETE` to send before restarting) when an expected size is known |
 | `DELETE /files/upload?path=P` | removes the partial; `{"deleted": bool}` |
+| `GET /files/job-log?job=J&stream=S` | bearer only (a Signed Link → 403 `invalid_link`); streams the stored bytes of `stdout` or `stderr` with `Content-Length`; unknown job 404 `JOB_NOT_FOUND`, bad stream 400, reclaimed 410 `LOG_RECLAIMED`. The URL names a job and stream, never a path. A job being downloaded is not reclaimed or pruned |
+
+The `OFFSET_MISMATCH` body also carries `expected_offset`.
 
 Error bodies are JSON `{"error": "<CODE>", "message": "..."}` using the codes of §5, including for unexpected OS errors (`PERMISSION_DENIED` → 403, `IO_ERROR` → 500). An existing `P.fmcp-partial` that is a link or not a regular file → 400 `NOT_A_FILE` on every upload route. Upload requests on the same partial run one at a time, so of two chunks sent at the same offset one gets 409.
 
-Signed Links (ADR 0003): the query adds `exp` (Unix seconds), `by` (issuing token name), and `sig` = unpadded base64url HMAC-SHA256 over direction, `path`, `exp`, `by`, `overwrite`, `max_bytes`, keyed by a random secret made at each launch (a restart revokes every link); a link is also void once its issuing token is removed. A repeated signed field invalidates the link. A download link allows `GET`/`HEAD /files/download` and is reusable until `exp`. An upload link adds `overwrite` (and `max_bytes` when set) to the query and allows `GET`/`PUT`/`DELETE /files/upload` and `POST /files/upload/complete` for its path; complete uses the signed `overwrite`, a chunk that would grow the partial beyond `max_bytes`, or a complete of a partial larger than it, → 413, and after a successful complete the link is void. Every use re-checks the current Allowed Roots, so a path no longer inside them → 403 `OUTSIDE_ROOTS`.
+Signed Links (ADR 0003): the query adds `exp` (Unix seconds), `by` (issuing token name), and `sig` = unpadded base64url HMAC-SHA256 over direction, `path`, `exp`, `by`, `overwrite`, `max_bytes`, `size`, `sha256`, keyed by a random secret made at each launch (a restart revokes every link); a link is also void once its issuing token is removed. A repeated signed field invalidates the link. A download link allows `GET`/`HEAD /files/download` and is reusable until `exp`. An upload link adds `overwrite` (and `max_bytes` when set) to the query and allows `GET`/`PUT`/`DELETE /files/upload` and `POST /files/upload/complete` for its path; complete uses the signed `overwrite`, a chunk that would grow the partial beyond `max_bytes`, or a complete of a partial larger than it, → 413, and after a successful complete the link is void. Every use re-checks the current Allowed Roots, so a path no longer inside them → 403 `OUTSIDE_ROOTS`.
 
 ## 7. Jobs (008, 009)
 
-- In-memory registry keyed by random UUID strings; lost on restart; finished jobs kept 1 hour.
-- Each job captures stdout and stderr separately, keeping at most 1 MiB per stream (head and tail halves).
-- Result shape (shared by `run_command`, `push_to_remote`, `pull_from_remote`, `get_job`):
-  - `{status: "exited", job_id, exit_code, stdout, stderr, duration_ms, truncated}`
-  - `{status: "running", job_id, stdout, stderr, duration_ms, truncated}`
-  - `{status: "cancelled", job_id, stdout, stderr, duration_ms, truncated}`
+- Registry keyed by random UUID strings (ADR 0004). Each job has a directory `jobs/<job_id>/` next to the audit log with `meta.json`, `stdout.log` and `stderr.log` (outside every Allowed Root). Metadata survives a restart: a job that was `running` then becomes `interrupted` (its process is never killed, since a recorded pid cannot be told from a new process); its TTL counts from the first interruption. Finished jobs are kept 1 hour, then the directory is removed; a job whose termination is unconfirmed, being downloaded, or protected is not pruned.
+- Each stream's bytes are appended to its log file, at most 256 MiB per stream; output beyond that is still drained and counted but not stored (`log_truncated`). Total log bytes are bounded by `jobs.max_log_bytes`: when space runs out the oldest finished unprotected logs are reclaimed (`log_reclaimed: true`, the job record stays). A memory buffer keeps at most 1 MiB per stream (head and tail halves) for snapshots.
+- Result shape (shared by `run_command`, `run_script`, `push_to_remote`, `pull_from_remote`, `get_job`):
+  - `status`: `running` | `exited` (adds `exit_code`) | `cancelled` | `timed_out` | `interrupted`; plus `job_id`, `stdout`, `stderr`, `duration_ms`, `truncated`.
+  - `cancelled`, `timed_out` and `interrupted` add `termination_complete` (bool; `termination_error` when false and known): `true` only once the process tree is confirmed gone within 10 s. A repeated `cancel_job` on an unconfirmed job kills again.
   - Returned streams are capped at 32 KiB each: first 16 KiB + `\n...[N bytes truncated]...\n` + last 16 KiB.
+  - Per stream: `<s>_next` (the Output Cursor to pass next time), `<s>_produced_end` (total bytes produced; null after an interruption), `<s>_retained_end` (bytes stored), `log_truncated`. A reclaimed job returns `log_reclaimed: true` and no stream fields.
 - `wait_sec` is clamped to 0–50.
 - A job is `running` until its process and every descendant still holding its stdout/stderr have exited.
-- `get_job(job_id, wait_sec=0)`, `cancel_job(job_id)` (kills the process tree, including descendants that outlived the job's process: on Windows each job's process is put in its own Job Object, which is terminated, with `taskkill /T /F /PID` as the fallback when that fails; elsewhere `killpg` on the job's process group). Unknown id → `JOB_NOT_FOUND`. Registered while the Command Executor or remote transfer is enabled, added and removed live with them (section 12).
+- `get_job(job_id, wait_sec=0, stdout_offset=None, stderr_offset=None)`: an offset is a byte cursor (≥ 0) into the stored stream; that stream then returns the next up to 32 KiB from there as `<s>`, with `<s>_next`, `<s>_more` (more stored bytes remain) and `<s>_lost` (bytes before the cursor no longer available, normally 0). An offset beyond the end → `INVALID_ARGUMENT`; any offset on a reclaimed job → `LOG_RECLAIMED`. The text is decoded as UTF-8 with replacement characters, so a cursor inside a character yields `\ufffd`. Poll with the returned `<s>_next`.
+- `cancel_job(job_id)` (kills the process tree, including descendants that outlived the job's process: on Windows each job's process is put in its own Job Object, which is terminated, with `taskkill /T /F /PID` as the fallback when that fails; elsewhere `killpg` on the job's process group). Unknown id → `JOB_NOT_FOUND`. Registered while the Command Executor or remote transfer is enabled, added and removed live with them (section 12).
 - Executables given by name (`powershell.exe`, `pwsh.exe`, `cmd.exe`, `scp`, `taskkill.exe`) are resolved to absolute paths from the absolute `PATH` entries (with `PATHEXT` on Windows); the current directory is never searched. Not found → `NOT_FOUND`.
 
 ## 8. Command Executor (008)
@@ -134,9 +145,13 @@ Signed Links (ADR 0003): the query adds `exp` (Unix seconds), `by` (issuing toke
 - Shell argv:
   - `powershell`: `powershell.exe -NoProfile -NonInteractive -Command "[Console]::OutputEncoding=[System.Text.Encoding]::UTF8; <command>"`
   - `pwsh`: same with `pwsh.exe`
-  - `cmd`: the command line `<cmd.exe> /c "<command>"`, passed verbatim (not argv-quoted) so quotes in the command reach `cmd.exe` intact
+  - `cmd`: the command line `<cmd.exe> /d /v:off /c "<command>"`, passed verbatim (not argv-quoted) so quotes in the command reach `cmd.exe` intact. `/d` skips AutoRun and `/v:off` disables delayed expansion, so registry settings cannot change a command's meaning.
   - `sh`: `/bin/sh -c <command>`
 - Non-zero exit codes are results, not tool errors.
+- `run_script(script, arguments=None, cwd=None, env=None, wait_sec=30, timeout_sec=None)`: the script is written to `scripts/<job_id>/` next to the audit log (with an `owner.json`), run from there as a file so no shell re-parses it, and deleted once its process is confirmed gone. Argv: `powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File script.ps1 <arguments...>` (UTF-8 with BOM, output encoding set in the file); `pwsh.exe` likewise; `cmd`: `<cmd.exe> /d /v:off /c "<script.cmd>" "<arg>"...` (file starts with `@chcp 65001>nul`, CRLF); `sh`: `/bin/sh script.sh <arguments...>` (LF).
+  - `script` is at most 1 MiB of UTF-8 bytes (excluding what the server adds). A NUL, a lone surrogate, or a bad `timeout_sec` (not a finite number > 0) → `INVALID_ARGUMENT` before anything is written or launched. For `cmd`, an argument containing one of `& | < > ^ % "` CR LF → `INVALID_ARGUMENT` (use PowerShell or `env`).
+  - `timeout_sec` kills the process tree when it expires: status `timed_out`, with `termination_complete` as above. `env` affects only that job.
+  - At startup, a script directory is deleted only when its job's recorded process is known to be gone; others are kept and listed in the startup summary for manual cleanup.
 
 ## 9. Remote transfer (009)
 
@@ -149,6 +164,7 @@ Signed Links (ADR 0003): the query adds `exp` (Unix seconds), `by` (issuing toke
 
 - JSON lines: `ts`, `token`, `kind` (`tool`|`http`), `name`, `args`, `outcome`, `duration_ms`; rejected auth lines include `client`. Signed Link requests have `token` = `signed:<issuer>` and include `client`; the issuing `prepare_*` tool line records `for_host`.
 - Never: tokens, auth headers, file content, `write_text.content`, `env` values.
+- `run_script`'s `script` and `arguments` may hold secrets, so the log keeps only `script_bytes` / `script_sha256` and, per argument, `{bytes, sha256}`; `logging.audit_preview_chars = N` (> 0) adds a leading preview of N characters. `run_command`'s `command` is still logged in full, so do not put secrets in it. Job Log requests log `path`, `job` and `stream`.
 - File: `logging.audit_file`, else `%LOCALAPPDATA%\file-manager-mcp\logs\audit.log` / `$XDG_STATE_HOME/file-manager-mcp/audit.log`; `RotatingFileHandler` 10 MB × 5.
 
 ## 11. Concurrency (014)

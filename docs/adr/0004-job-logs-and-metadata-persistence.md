@@ -1,0 +1,12 @@
+# Job Logs and Job metadata persist outside the Allowed Roots
+
+Remote Agents kept re-reading a Job's whole stdout on every `get_job`, and after a server restart a reconnecting agent lost every Job it had started, together with the output it needed as evidence. So a Job's stdout and stderr are now written to disk as a Job Log, in a `jobs/` directory next to the audit log, and each Job's metadata (`meta.json`) survives a restart. A Job still running at a restart is marked `interrupted` (outcome unknown, no `exit_code`) and is never killed by the new process, because its recorded PID cannot be proven to be the same process any more. Job Logs are bounded: 256 MiB per stream, then output is drained and counted but not stored; `jobs.max_log_bytes` (default 2 GiB) for all of them, reclaiming the oldest unprotected finished Jobs first; a finished Job's log is kept 1 hour. `prepare_job_log` returns a bearer-authenticated File Channel URL that locates a Job and a stream, never a path, and protects that log from reclamation until its `expires` time; explicit protection may use at most half of `jobs.max_log_bytes`.
+
+Job Logs live outside the Allowed Roots on purpose: they are server state, not user files, and putting them inside a root would let `delete`, `move`, or `write_text` tamper with evidence and would count them against nothing. The cost is a second kind of path the File Channel serves, which is why the URL takes `job` and `stream` and nothing else. Script directories (`scripts/<job_id>/`, for `run_script`) are kept apart from Job Logs and are not subject to their TTL or capacity rules: a script is deleted once its Job's process is confirmed gone, and a directory whose Job is `interrupted` or whose termination is unconfirmed is kept for the user to remove by hand, since an orphaned process might still be reading it.
+
+## Considered Options
+
+- Keep Jobs and output in memory only (the previous behaviour): simple, but a restart destroys the evidence a reconnecting agent needs, and every `get_job` repeats the full snapshot.
+- Put Job Logs inside an Allowed Root and reuse `prepare_download`: no new route, but the logs become user-editable and share the root's namespace.
+- Signed Links for Job Logs: the same mechanism as DUT links, but Signed Links are defined as DUT-only (ADR 0003), and a bearer URL with an explicit protection window is enough for a Remote Agent.
+- Kill orphaned Jobs at startup: tidy, but unsafe once the PID may have been reused, and it would destroy work the user did not ask to stop.

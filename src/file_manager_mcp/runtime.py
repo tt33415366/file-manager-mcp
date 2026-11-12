@@ -10,6 +10,7 @@ import logging
 import sys
 from collections.abc import Callable
 from dataclasses import dataclass, fields, replace
+from pathlib import Path
 from typing import Any
 
 from mcp.server import MCPServer
@@ -40,7 +41,8 @@ INSTRUCTIONS = (
     "total. To hand a file to or from a DUT (a device on another network of "
     "this PC), pass for_host to prepare_download / prepare_upload and run the returned curl on the DUT; it "
     "needs no token. Errors start with a code such as NOT_FOUND:. Long-running commands and transfers return "
-    "status 'running' with a job_id; poll get_job."
+    "status 'running' with a job_id; poll get_job, passing back stdout_next / stderr_next as "
+    "stdout_offset / stderr_offset to receive only new output."
 )
 
 READ_ONLY = ToolAnnotations(readOnlyHint=True)
@@ -72,20 +74,41 @@ DESCRIPTIONS = {
         "(a DUT's IP or hostname) the link is a tokenless Signed Link the DUT can curl, valid expires_in seconds."
     ),
     "prepare_upload": (
-        "Get File Channel URLs to upload a file of any size. Each PUT body must be at most "
-        "max_chunk_bytes (64 MiB); a larger body is HTTP 413. The sample curl is one chunk: "
-        "split a larger file and continue at upload_url&offset=N from the returned offset, "
-        "then POST complete_url (optionally &sha256=..). With for_host (a DUT's IP or hostname) "
-        "the links are a tokenless Signed Link for the DUT with overwrite and max_bytes fixed; "
-        "max_bytes is the finished signed file's total. "
+        "Get File Channel URLs to upload a file of any size. upload_url already carries the offset to "
+        "continue from; each PUT body must be at most max_chunk_bytes (64 MiB), a larger body is HTTP 413. Pass size (and optionally "
+        "sha256) to get chunks: one entry per PUT with its own curl (set LOCAL_FILE first), and expect_offset, "
+        "the offset the PUT must return; a chunk succeeded when curl exits 0 and the returned offset equals "
+        "expect_offset, not by the pipeline's exit status. Then POST complete (size and sha256, when given, are "
+        "verified before the file is published). A SIZE_MISMATCH or DIGEST_MISMATCH reply that says "
+        "reset_required carries a DELETE to discard the partial; prepare_upload never discards it. With "
+        "for_host (a DUT's IP or hostname) the links are a tokenless Signed Link for the DUT with overwrite, "
+        "max_bytes, size and sha256 fixed; max_bytes is the finished signed file's total. "
         "The links stop working after the upload completes."
     ),
     "run_command": (
         "Run a shell command on the Local PC (unsandboxed, as the user). Waits up to wait_sec (max 50); "
-        "if still running returns status 'running' with job_id. Non-zero exit codes are results."
+        "if still running returns status 'running' with job_id. Non-zero exit codes are results. "
+        "For multi-line code, quotes, or arguments use run_script."
     ),
-    "get_job": "Get a job's status and output, waiting up to wait_sec (max 50) for it to finish.",
+    "run_script": (
+        "Run a script on the Local PC (unsandboxed, as the user) with the configured shell: the text is "
+        "written to a temporary file and run with arguments (an array of strings), so nothing is re-parsed "
+        "by shells on the way. Waits up to wait_sec (max 50); if still running returns status 'running' with "
+        "job_id. timeout_sec (finite, > 0) kills the process tree when it expires: status 'timed_out'. "
+        "cmd rejects arguments containing & | < > ^ % \" CR LF."
+    ),
+    "get_job": (
+        "Get a job's status and output, waiting up to wait_sec (max 50) for it to finish. Without "
+        "stdout_offset / stderr_offset you get the capped snapshot; pass back the previous stdout_next / "
+        "stderr_next (raw byte positions) to read the next 32 KiB of that stream. stdout_lost counts "
+        "bytes that are no longer stored; stdout_more says more can be read now."
+    ),
     "cancel_job": "Cancel a running job, killing its whole process tree.",
+    "prepare_job_log": (
+        "Get a File Channel URL (bearer token) and curl to download the stored stdout or stderr of a job, "
+        "and keep that log from being reclaimed until expires. The log is bounded (256 MiB per stream, "
+        "log_truncated says it was cut) and is reclaimed to free disk space (LOG_RECLAIMED)."
+    ),
     "push_to_remote": (
         "Copy a local file or directory (recursive=true) to an allowlisted Remote Host with scp. "
         "Waits up to wait_sec (max 50), then continues as a job."
@@ -96,7 +119,7 @@ DESCRIPTIONS = {
     ),
 }
 
-JOB_TOOLS = frozenset({"get_job", "cancel_job"})
+JOB_TOOLS = frozenset({"get_job", "cancel_job", "prepare_job_log"})
 
 
 @dataclass(frozen=True)
@@ -111,10 +134,12 @@ class Feature:
 FEATURES = {
     COMMAND_KIND: Feature(
         enabled=lambda config: config.command_executor.enabled,
-        tools=frozenset({"run_command"}),
+        tools=frozenset({"run_command", "run_script"}),
         rule="""\
-- `run_command` runs unsandboxed on the Local PC as the user. If it returns status `running`, poll \
-`get_job` (`wait_sec` up to 50) and stop it with `cancel_job`.
+- `run_command` and `run_script` run unsandboxed on the Local PC as the user; use `run_script` for \
+multi-line code, quotes, or arguments. If one returns status `running`, poll `get_job` (`wait_sec` up to 50, \
+passing back `stdout_next` / `stderr_next` as `stdout_offset` / `stderr_offset` to read only new output) \
+and stop it with `cancel_job`; `prepare_job_log` downloads a job's stored output.
 """,
     ),
     TRANSFER_KIND: Feature(
@@ -126,7 +151,7 @@ transfers continue as jobs (`get_job`).
 """,
     ),
 }
-RESTART_SECTIONS = ("server", "logging")
+RESTART_SECTIONS = ("server", "logging", "jobs")
 RESTART_FIELDS = tuple(
     f"{section}.{f.name}" for section in RESTART_SECTIONS for f in fields(getattr(Config(allowed_roots=[]), section))
 )
@@ -179,6 +204,7 @@ class Runtime:
         tokens: TokenStore,
         audit: AuditLog | None = None,
         interfaces: Interfaces = os_interfaces,
+        state_dir: Path | None = None,
     ) -> None:
         config = copy.deepcopy(config)
         self.config = config
@@ -188,12 +214,12 @@ class Runtime:
         self._apply_lock = asyncio.Lock()
         self.addressing = Addressing(config.server, interfaces)
         self.policy = PathPolicy(config.allowed_roots)
-        self.jobs = JobRegistry()
+        self.jobs = JobRegistry(state_dir=state_dir, max_log_bytes=config.jobs.max_log_bytes)
         self.executor = CommandExecutor(self.policy, config.command_executor.shell, self.jobs)
         self.transfer = RemoteTransfer(self.policy, config.remote.allowed_hosts, self.jobs)
         ops = FileOps(self.policy)
         self.signer = LinkSigner(issuers=lambda: {e.name for e in tokens.list()})
-        self.channel = FileChannel(self.policy, self.addressing, self.signer)
+        self.channel = FileChannel(self.policy, self.addressing, self.signer, jobs=self.jobs)
         self._tools: dict[str, tuple[Callable, ToolAnnotations]] = {
             "list_roots": (ops.list_roots, READ_ONLY),
             "list_dir": (ops.list_dir, READ_ONLY),
@@ -209,7 +235,9 @@ class Runtime:
             "prepare_upload": (self.channel.prepare_upload, MUTATING),
             "get_job": (self._get_job, READ_ONLY),
             "cancel_job": (self._cancel_job, DESTRUCTIVE),
+            "prepare_job_log": (self.channel.prepare_job_log, MUTATING),
             "run_command": (self.executor.run_command, DESTRUCTIVE),
+            "run_script": (self.executor.run_script, DESTRUCTIVE),
             "push_to_remote": (self.transfer.push, MUTATING),
             "pull_from_remote": (self.transfer.pull, DESTRUCTIVE),
         }
@@ -220,8 +248,17 @@ class Runtime:
         )
         self._sync_tools(set(), self._tool_names(config))
 
-    async def _get_job(self, job_id: str, wait_sec: float = 0) -> dict[str, Any]:
-        return await self.jobs.wait_result(self.jobs.get(job_id), wait_sec)
+    async def _get_job(
+        self,
+        job_id: str,
+        wait_sec: float = 0,
+        stdout_offset: int | None = None,
+        stderr_offset: int | None = None,
+    ) -> dict[str, Any]:
+        for name, offset in (("stdout_offset", stdout_offset), ("stderr_offset", stderr_offset)):
+            if offset is not None and (isinstance(offset, bool) or offset < 0):
+                raise FileManagerError("INVALID_ARGUMENT", f"{name} must be a non-negative integer")
+        return await self.jobs.wait_result(self.jobs.get(job_id), wait_sec, stdout_offset, stderr_offset)
 
     async def _cancel_job(self, job_id: str) -> dict[str, Any]:
         return await self.jobs.cancel(job_id)

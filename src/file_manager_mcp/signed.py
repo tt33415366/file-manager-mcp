@@ -13,7 +13,7 @@ from dataclasses import dataclass
 
 DOWNLOAD = "download"
 UPLOAD = "upload"
-SIGNED_FIELDS = ("path", "exp", "by", "overwrite", "max_bytes", "sig")
+SIGNED_FIELDS = ("path", "exp", "by", "overwrite", "max_bytes", "size", "sha256", "sig")
 
 
 @dataclass(frozen=True)
@@ -25,6 +25,8 @@ class Grant:
     max_bytes: int | None
     sig: str
     exp: int
+    size: int | None = None
+    sha256: str | None = None
 
 
 class LinkSigner:
@@ -47,8 +49,10 @@ class LinkSigner:
         self._consumed = {sig: exp for sig, exp in self._consumed.items() if exp > now}
         self._consumed[grant.sig] = grant.exp
 
-    def _sig(self, direction: str, path: str, exp: str, by: str, overwrite: str, max_bytes: str) -> str:
-        message = json.dumps([direction, path, exp, by, overwrite, max_bytes]).encode("utf-8")
+    def _sig(
+        self, direction: str, path: str, exp: str, by: str, overwrite: str, max_bytes: str, size: str, sha256: str
+    ) -> str:
+        message = json.dumps([direction, path, exp, by, overwrite, max_bytes, size, sha256]).encode("utf-8")
         digest = hmac.new(self._key, message, hashlib.sha256).digest()
         return base64.urlsafe_b64encode(digest).rstrip(b"=").decode("ascii")
 
@@ -60,6 +64,8 @@ class LinkSigner:
         expires_in: int,
         overwrite: bool = False,
         max_bytes: int | None = None,
+        size: int | None = None,
+        sha256: str | None = None,
     ) -> dict[str, str]:
         """Query parameters (besides ``path``) that make a link for ``direction`` on ``path``."""
         params = {"exp": str(int(self._clock()) + expires_in), "by": by}
@@ -67,7 +73,11 @@ class LinkSigner:
             params["overwrite"] = "true" if overwrite else "false"
             if max_bytes is not None:
                 params["max_bytes"] = str(max_bytes)
-        fields = (params.get("overwrite", ""), params.get("max_bytes", ""))
+            if size is not None:
+                params["size"] = str(size)
+            if sha256 is not None:
+                params["sha256"] = sha256
+        fields = tuple(params.get(k, "") for k in ("overwrite", "max_bytes", "size", "sha256"))
         params["sig"] = self._sig(direction, path, params["exp"], by, *fields)
         return params
 
@@ -80,11 +90,22 @@ class LinkSigner:
         q = dict(pairs)
         path, exp, by, sig = q.get("path"), q.get("exp", ""), q.get("by"), q.get("sig", "")
         overwrite, max_bytes = q.get("overwrite", ""), q.get("max_bytes", "")
+        size, sha256 = q.get("size", ""), q.get("sha256", "")
         if path is None or by is None or not exp.isdigit():
             return None
-        expected = self._sig(direction, path, exp, by, overwrite, max_bytes)
+        expected = self._sig(direction, path, exp, by, overwrite, max_bytes, size, sha256)
         if not hmac.compare_digest(sig.encode("utf-8"), expected.encode("ascii")) or self._clock() >= int(exp) or sig in self._consumed:
             return None
         if self._issuers is not None and by not in self._issuers():
             return None
-        return Grant(direction, path, by, overwrite == "true", int(max_bytes) if max_bytes else None, sig, int(exp))
+        return Grant(
+            direction,
+            path,
+            by,
+            overwrite == "true",
+            int(max_bytes) if max_bytes else None,
+            sig,
+            int(exp),
+            int(size) if size else None,
+            sha256 or None,
+        )

@@ -41,6 +41,12 @@ class RemoteConfig:
 @dataclass
 class LoggingConfig:
     audit_file: str = ""
+    audit_preview_chars: int = 0
+
+
+@dataclass
+class JobsConfig:
+    max_log_bytes: int = 2 * 1024**3
 
 
 @dataclass
@@ -50,6 +56,7 @@ class Config:
     command_executor: CommandExecutorConfig = field(default_factory=CommandExecutorConfig)
     remote: RemoteConfig = field(default_factory=RemoteConfig)
     logging: LoggingConfig = field(default_factory=LoggingConfig)
+    jobs: JobsConfig = field(default_factory=JobsConfig)
     path: Path | None = None
 
 
@@ -58,6 +65,7 @@ _SECTIONS = {
     "command_executor": CommandExecutorConfig,
     "remote": RemoteConfig,
     "logging": LoggingConfig,
+    "jobs": JobsConfig,
 }
 
 
@@ -169,5 +177,9 @@ def config_from_dict(raw: dict[str, Any], path: Path | None = None) -> Config:
     shell = sections["command_executor"].shell
     if shell and shell not in SHELLS:
         raise ConfigError(f"command_executor.shell must be one of {', '.join(SHELLS)}")
+    if sections["logging"].audit_preview_chars < 0:
+        raise ConfigError("logging.audit_preview_chars must be >= 0")
+    if sections["jobs"].max_log_bytes < 1:
+        raise ConfigError("jobs.max_log_bytes must be >= 1")
 
     return Config(allowed_roots=list(roots), path=path, **sections)
