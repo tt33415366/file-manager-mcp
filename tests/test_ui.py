@@ -174,7 +174,7 @@ def test_get_returns_running_server_and_logging(client, root, tmp_path):
             "host": "127.0.0.1",
             "port": 8765,
             "public_base_url": "",
-            "allowed_hosts": [],
+            "allowed_hosts": ["fm.example.com"],  # applied live
             "allowed_origins": [],
         },
         "logging": {"audit_file": "", "audit_preview_chars": 0},
@@ -188,9 +188,6 @@ def test_get_lists_the_fields_that_need_a_restart(client):
     assert client.get("/api/config", headers=KEY).json()["restart_fields"] == [
         "server.host",
         "server.port",
-        "server.public_base_url",
-        "server.allowed_hosts",
-        "server.allowed_origins",
         "logging.audit_file",
         "logging.audit_preview_chars",
         "jobs.max_log_bytes",
@@ -198,6 +195,17 @@ def test_get_lists_the_fields_that_need_a_restart(client):
 
 
 TOML_ONLY_RESTART_FIELDS = {"logging.audit_preview_chars", "jobs.max_log_bytes"}  # not on the page
+
+
+def test_restart_endpoint_asks_the_runtime_to_restart(client, runtime):
+    stopped = []
+    runtime.stop_servers = lambda: stopped.append(True)
+
+    r = client.post("/api/restart", headers=KEY)
+
+    assert r.json() == {"restarting": True}
+    assert runtime.restart_requested and stopped == [True]
+    assert client.post("/api/restart").status_code == 403
 
 
 def test_every_restart_tag_on_the_page_names_a_restart_field(client):

@@ -363,7 +363,7 @@
     if (S.path === "lan") {
       if (!i.lan_ips.length) list.push(["bad", "This PC has no LAN IPv4 address right now."]);
       else if (!lanCovered())
-        list.push(["bad", `The server listens on <code>${esc(i.listen_host)}</code> only, so LAN machines cannot connect: set Network → Listen host to <code>0.0.0.0</code> in the panel, save, and restart.`]);
+        list.push(["bad", `The server listens on <code>${esc(i.listen_host)}</code> only, so LAN machines cannot connect: set Network → Listen host to <code>0.0.0.0</code> in the panel, save, and use Restart now.`]);
       list.push(["", "LAN direct is plain HTTP: the token and file contents cross the network unencrypted. Use it only on a network you trust; Tailscale gives the same reach over HTTPS."]);
     }
     if (tunnelPath()) {
@@ -371,9 +371,9 @@
       else {
         const allowed = i.allowed_hosts.map((x) => x.toLowerCase());
         if (!allowed.includes(h.toLowerCase()) && !allowed.includes(h.toLowerCase() + ":*"))
-          list.push(["bad", `The server rejects Host <code>${esc(h)}</code>: add it under Network → Extra allowed Host headers in the panel, save, and restart.`]);
+          list.push(["bad", `The server rejects Host <code>${esc(h)}</code>: add it under Network → Extra allowed Host headers in the panel and save.`]);
         if (i.public_base_url.replace(/\/+$/, "") !== "https://" + h)
-          list.push(["", `Set Network → Public base URL to <code>https://${esc(h)}</code> so File Channel links point through the tunnel (restart to apply).`]);
+          list.push(["", `Set Network → Public base URL to <code>https://${esc(h)}</code> so File Channel links point through the tunnel.`]);
       }
     }
     alerts("pathAlerts", list);

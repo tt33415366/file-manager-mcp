@@ -144,7 +144,7 @@
     <div class="filemeta">
       <span class="badge new" id="fileBadge">—</span>
       <div class="path-chip" id="pathChip">loading…</div>
-      <div class="note">Saving rewrites the file (comments are not kept) and applies it to the running server; Network and Audit Log changes need a restart.</div>
+      <div class="note">Saving rewrites the file (comments are not kept) and applies it to the running server; Listen host, Port and Audit file need a restart (Restart now).</div>
     </div>
     <div class="banner" id="loadError" hidden></div>
   </header>
@@ -168,11 +168,11 @@
         <label class="f"><span>Port<em class="rst" data-rst="server.port" hidden>restart to apply</em></span><input type="number" id="port" min="1" max="65535"></label>
       </div>
       <p class="warn" id="hostWarn" hidden>⚠ Listening beyond loopback: LAN clients and DUTs use plain HTTP. Tunnels only need 127.0.0.1.</p>
-      <label class="f"><span>Public base URL<em class="rst" data-rst="server.public_base_url" hidden>restart to apply</em></span><input type="text" id="publicBaseUrl" placeholder="https://fm.example.com"></label>
-      <div class="sub">Extra allowed Host headers<em class="rst" data-rst="server.allowed_hosts" hidden>restart to apply</em></div>
+      <label class="f"><span>Public base URL</span><input type="text" id="publicBaseUrl" placeholder="https://fm.example.com"></label>
+      <div class="sub">Extra allowed Host headers</div>
       <div class="list" id="hostsList"></div>
       <form class="adder" data-list="hosts"><input type="text" placeholder="fm.example.com" aria-label="Add allowed host"><button class="btn" type="submit">Add</button></form>
-      <div class="sub">Allowed origins<em class="rst" data-rst="server.allowed_origins" hidden>restart to apply</em></div>
+      <div class="sub">Allowed origins</div>
       <div class="list" id="originsList"></div>
       <form class="adder" data-list="origins"><input type="text" placeholder="https://fm.example.com" aria-label="Add allowed origin"><button class="btn" type="submit">Add</button></form>
     </section>
@@ -251,6 +251,7 @@
 
 <div class="dock">
   <div class="msg" id="msg" role="status" aria-live="polite">Loading configuration…</div>
+  <button class="btn" id="restart" type="button" hidden>Restart now</button>
   <button class="btn ghost" id="discard" type="button" disabled>Discard</button>
   <button class="btn primary" id="save" type="button" disabled>Commit to disk</button>
 </div>
@@ -276,7 +277,7 @@
     return data;
   };
 
-  let state = null, saved = "", lastError = "", onDisk = false, running = null, restartFields = [];
+  let state = null, saved = "", lastError = "", onDisk = false, running = null, restartFields = [], launch = null;
 
   const lists = {
     roots:   { el: $("rootsList"),   get: () => state.allowed_roots,           check: true,  empty: "No roots: Remote Agents get NO_ALLOWED_ROOTS until you add one." },
@@ -370,16 +371,31 @@
 
   function renderRestart() {
     const disk = JSON.parse(saved);
-    document.querySelectorAll("[data-rst]").forEach((tag) => {
-      const [section, field] = tag.dataset.rst.split(".");
-      tag.hidden = !onDisk || !restartFields.includes(tag.dataset.rst)
-        || JSON.stringify(disk[section][field]) === JSON.stringify(running[section][field]);
-    });
+    const pending = (name) => {
+      const [section, field] = name.split(".");
+      return onDisk && restartFields.includes(name) && JSON.stringify(disk[section][field]) !== JSON.stringify(running[section][field]);
+    };
+    document.querySelectorAll("[data-rst]").forEach((tag) => { tag.hidden = !pending(tag.dataset.rst); });
+    $("restart").hidden = !restartFields.some(pending);
   }
+
+  $("restart").onclick = async () => {
+    if (JSON.stringify(state) !== saved && !confirm("Unsaved changes will be lost. Restart anyway?")) return;
+    $("restart").disabled = true; setLamp("dirty", "Restarting"); say("Restarting…", "dirty");
+    try { await api("POST", "/api/restart"); } catch (err) { say(err.message, "err"); $("restart").disabled = false; return; }
+    for (let i = 0; i < 60; i++) {
+      await new Promise((r) => setTimeout(r, 500));
+      try {
+        if ((await api("GET", "/api/config")).launch === launch) continue; // the old process is still shutting down
+        await load(); $("restart").disabled = false; say("Restarted.", "ok"); return;
+      } catch { /* still down */ }
+    }
+    $("restart").disabled = false; setLamp("error", "Down"); say("The server did not come back; check the console.", "err");
+  };
 
   async function load() {
     const data = await api("GET", "/api/config");
-    state = data.config; saved = JSON.stringify(state); onDisk = data.exists && !data.error; running = data.running; restartFields = data.restart_fields;
+    state = data.config; saved = JSON.stringify(state); onDisk = data.exists && !data.error; launch = data.launch; running = data.running; restartFields = data.restart_fields;
     renderRestart();
     $("pathChip").textContent = data.path;
     const badge = $("fileBadge");

@@ -23,7 +23,7 @@ def make_client(rejections=None):
         app,
         verify=TOKENS.get,
         accepts_host=lambda host: host == "testserver",
-        allowed_origins=["https://fm.example.com"],
+        allowed_origins=lambda: ["https://fm.example.com"],
         direction_of=FileChannel.direction_of,
         verify_link=SIGNER.verify,
         on_reject=(lambda scope, status: rejections.append(status)) if rejections is not None else None,

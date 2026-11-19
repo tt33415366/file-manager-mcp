@@ -7,6 +7,7 @@ import copy
 import functools
 import inspect
 import logging
+import secrets
 import sys
 from collections.abc import Callable
 from dataclasses import dataclass, fields, replace
@@ -152,8 +153,13 @@ transfers continue as jobs (`get_job`).
     ),
 }
 RESTART_SECTIONS = ("server", "logging", "jobs")
+LIVE_SERVER_FIELDS = ("public_base_url", "allowed_hosts", "allowed_origins")  # read per request, so a save applies
+LIVE_FIELDS = tuple(f"server.{name}" for name in LIVE_SERVER_FIELDS)
 RESTART_FIELDS = tuple(
-    f"{section}.{f.name}" for section in RESTART_SECTIONS for f in fields(getattr(Config(allowed_roots=[]), section))
+    name
+    for section in RESTART_SECTIONS
+    for name in (f"{section}.{f.name}" for f in fields(getattr(Config(allowed_roots=[]), section)))
+    if name not in LIVE_FIELDS
 )
 EXECUTOR_WARNING = (
     "WARNING: Command Executor is enabled. Remote Agents can run any command on this PC, "
@@ -212,6 +218,9 @@ class Runtime:
         self.audit = audit
         self.startup_token: str | None = None
         self._apply_lock = asyncio.Lock()
+        self.launch_id = secrets.token_hex(4)  # lets the config page tell a restarted server from the old one
+        self.restart_requested = False
+        self.stop_servers: Callable[[], object] = lambda: None  # set by server.run once the listeners exist
         self.addressing = Addressing(config.server, interfaces)
         self.policy = PathPolicy(config.allowed_roots)
         self.jobs = JobRegistry(state_dir=state_dir, max_log_bytes=config.jobs.max_log_bytes)
@@ -283,8 +292,13 @@ class Runtime:
                     structured_output=True,
                 )
 
+    def request_restart(self) -> None:
+        """Stop both listeners; ``server.serve`` then starts again from the saved config file."""
+        self.restart_requested = True
+        self.stop_servers()
+
     async def apply(self, new: Config) -> dict[str, list[str]]:
-        """Apply ``new`` to the running server; ``server`` and ``logging`` keep their running values.
+        """Apply ``new`` to the running server; ``RESTART_FIELDS`` keep their running values.
 
         Calls run one at a time: an overlapping apply could reopen a job kind that a slower one then closes.
         """
@@ -296,13 +310,17 @@ class Runtime:
         applied = ["allowed_roots"] if new.allowed_roots != old.allowed_roots else []
         applied += _changed("command_executor", old.command_executor, new.command_executor)
         applied += _changed("remote", old.remote, new.remote)
-        restart_required = [n for s in RESTART_SECTIONS for n in _changed(s, getattr(old, s), getattr(new, s))]
+        changed_settings = [n for s in RESTART_SECTIONS for n in _changed(s, getattr(old, s), getattr(new, s))]
+        applied += [n for n in changed_settings if n in LIVE_FIELDS]
+        restart_required = [n for n in changed_settings if n in RESTART_FIELDS]
 
         self.policy.set_roots(new.allowed_roots)
         self.executor.shell = new.command_executor.shell or default_shell()
         self.transfer.allowed_hosts = list(new.remote.allowed_hosts)
         old_tools, new_tools = self._tool_names(old), self._tool_names(new)
         self._sync_tools(old_tools, new_tools)
+        for name in LIVE_SERVER_FIELDS:  # Addressing holds this very object, so it sees them at once
+            setattr(old.server, name, getattr(new.server, name))
         self.config = replace(new, **{s: getattr(old, s) for s in RESTART_SECTIONS})
 
         added, removed = new_tools - old_tools, old_tools - new_tools

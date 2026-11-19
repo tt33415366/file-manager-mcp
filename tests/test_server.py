@@ -813,3 +813,26 @@ def test_ctrl_c_stops_both_servers_and_closes_audit_log(root, tmp_path, tokens, 
     assert closed == [seen[0].runtime.audit]
     assert port_is_free(config.server.port)
     assert port_is_free(urlsplit(seen[0].ui_url).port)
+
+
+def test_restart_from_the_ui_comes_back_on_the_saved_port_and_the_same_ui(root, tmp_path, tokens):
+    config = live_config(tmp_path, [root])
+    new_port = free_port()
+    seen = []
+
+    def on_ready(started):
+        seen.append(started)
+        if len(seen) == 1:
+            saved = load_config(config.path)
+            saved.server.port = new_port
+            config.path.write_text(dump_config(saved), encoding="utf-8")
+            started.runtime.request_restart()
+        else:
+            signal.raise_signal(signal.SIGINT)
+
+    with pytest.raises(KeyboardInterrupt):
+        serve(config, tokens, open_browser=False, on_ready=on_ready)
+
+    assert [s.runtime.config.server.port for s in seen] == [config.server.port, new_port]
+    assert seen[0].ui_url == seen[1].ui_url
+    assert port_is_free(new_port)

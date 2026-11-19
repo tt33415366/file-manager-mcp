@@ -7,7 +7,7 @@ while Addressing checks the Local PC's interface addresses live. It is also the 
 from __future__ import annotations
 
 import json
-from collections.abc import Callable
+from collections.abc import Callable, Collection
 from dataclasses import dataclass
 from typing import Any, NamedTuple
 from urllib.parse import parse_qsl
@@ -80,7 +80,7 @@ class AuthMiddleware:
         *,
         verify: Callable[[str], str | None],
         accepts_host: Callable[[str], bool],
-        allowed_origins: list[str],
+        allowed_origins: Callable[[], Collection[str]],
         direction_of: Callable[[str, str], str | None] | None = None,
         verify_link: Callable[[str, list[tuple[str, str]]], Grant | None] | None = None,
         on_reject: Callable[[Scope, int], None] | None = None,
@@ -88,7 +88,7 @@ class AuthMiddleware:
         self.app = app
         self.verify = verify
         self.accepts_host = accepts_host
-        self.allowed_origins = set(allowed_origins)
+        self.allowed_origins = allowed_origins
         self.direction_of = direction_of
         self.verify_link = verify_link
         self.on_reject = on_reject
@@ -114,7 +114,7 @@ class AuthMiddleware:
             await self._reject(scope, send, 421, {"error": "invalid_host"})
             return
         origin = headers.get("origin")
-        if origin is not None and origin not in self.allowed_origins:
+        if origin is not None and origin not in self.allowed_origins():
             await self._reject(scope, send, 403, {"error": "invalid_origin"})
             return
 

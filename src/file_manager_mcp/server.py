@@ -22,7 +22,7 @@ from starlette.routing import Mount
 
 from .audit import AuditLog, HttpAuditMiddleware
 from .auth import AuthMiddleware
-from .config import Config, default_log_dir
+from .config import Config, ConfigError, default_log_dir, load_config
 from .runtime import EXECUTOR_WARNING, Runtime
 from .tokens import TokenStore
 from .ui import build_ui_app
@@ -34,7 +34,6 @@ class StartupError(Exception):
 
 def build_app(runtime: Runtime) -> Callable:
     config, server = runtime.config, runtime.server
-    origins = list(config.server.allowed_origins)
     mcp_app = server.streamable_http_app(
         streamable_http_path="/mcp",
         transport_security=TransportSecuritySettings(enable_dns_rebinding_protection=False),
@@ -55,7 +54,7 @@ def build_app(runtime: Runtime) -> Callable:
         http_audit,
         verify=runtime.tokens.verify,
         accepts_host=runtime.addressing.accepts_host,
-        allowed_origins=origins,
+        allowed_origins=lambda: runtime.config.server.allowed_origins,
         direction_of=runtime.channel.direction_of,
         verify_link=runtime.signer.verify,
         on_reject=http_audit.reject,
@@ -85,6 +84,11 @@ class _Server(uvicorn.Server):
 
 def _uvicorn(app: Callable) -> _Server:
     return _Server(uvicorn.Config(app, loop="none", lifespan="on", log_level="warning", timeout_graceful_shutdown=5))
+
+
+def _stop(servers: tuple[uvicorn.Server, ...]) -> None:
+    for server in servers:
+        server.should_exit = True
 
 
 def _listen(host: str, port: int) -> socket.socket:
@@ -140,18 +144,24 @@ async def run(
     *,
     open_browser: bool,
     on_ready: Callable[[Started], None] | None = None,
-) -> None:
-    """Serve MCP on server.host:server.port and the config UI on 127.0.0.1 until either stops."""
+    ui: tuple[int, str] | None = None,
+) -> tuple[int, str] | None:
+    """Serve MCP on server.host:server.port and the config UI on 127.0.0.1 until either stops.
+
+    ``ui`` is a previous run's config UI port and key, so an open page survives a restart. Returns them when the
+    UI asked for a restart, else None.
+    """
     check_event_loop()
     mcp_listener = _listen(config.server.host, config.server.port)
-    with mcp_listener as mcp_sock, socket.create_server(("127.0.0.1", 0)) as ui_sock:
+    with mcp_listener as mcp_sock, socket.create_server(("127.0.0.1", ui[0] if ui else 0)) as ui_sock:
         ui_port = ui_sock.getsockname()[1]
         audit_path = Path(config.logging.audit_file) if config.logging.audit_file else default_log_dir() / "audit.log"
         audit = AuditLog(audit_path, config.logging.audit_preview_chars)
         try:
             runtime = Runtime(config, tokens, audit, state_dir=audit_path.parent)
-            key = secrets.token_urlsafe(16)
+            key = ui[1] if ui else secrets.token_urlsafe(16)
             servers = (_uvicorn(build_app(runtime)), _uvicorn(build_ui_app(runtime, key, ui_port)))
+            runtime.stop_servers = lambda: _stop(servers)
             tasks = [asyncio.create_task(s.serve(sockets=[sock])) for s, sock in zip(servers, (mcp_sock, ui_sock))]
             try:
                 while not all(s.started for s in servers) and not any(t.done() for t in tasks):
@@ -177,6 +187,7 @@ async def run(
                 raise StartupError(f"the server stopped during startup{detail}") from (errors[0] if errors else None)
             if errors:
                 raise errors[0]
+            return (ui_port, key) if runtime.restart_requested else None
         finally:
             audit.close()
 
@@ -188,6 +199,15 @@ def serve(
     open_browser: bool,
     on_ready: Callable[[Started], None] | None = None,
 ) -> None:
+    """Run until stopped. A restart asked for in the UI starts over in a fresh event loop with the saved config."""
     loop_factory = asyncio.ProactorEventLoop if os.name == "nt" else None
-    with asyncio.Runner(loop_factory=loop_factory) as runner:
-        runner.run(run(config, tokens, open_browser=open_browser, on_ready=on_ready))
+    ui = None
+    while True:
+        with asyncio.Runner(loop_factory=loop_factory) as runner:
+            ui = runner.run(run(config, tokens, open_browser=open_browser and ui is None, on_ready=on_ready, ui=ui))
+        if ui is None:
+            return
+        try:
+            config = load_config(config.path)
+        except ConfigError as exc:
+            raise StartupError(f"cannot restart: {exc}") from None

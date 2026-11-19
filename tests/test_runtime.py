@@ -300,22 +300,44 @@ async def test_restart_required_settings_keep_running_values(root, tmp_path, mak
     )
     result = await runtime.apply(new)
     assert result == {
-        "applied": ["command_executor.enabled"],
-        "restart_required": [
-            "server.host",
-            "server.port",
+        "applied": [
+            "command_executor.enabled",
             "server.public_base_url",
             "server.allowed_hosts",
             "server.allowed_origins",
-            "logging.audit_file",
         ],
+        "restart_required": ["server.host", "server.port", "logging.audit_file"],
     }
-    assert runtime.config.server == running.server
+    assert (runtime.config.server.host, runtime.config.server.port) == (running.server.host, running.server.port)
     assert runtime.config.logging == running.logging
     assert runtime.config.command_executor.enabled is True
     async with Client(runtime.server) as c:
         link = await c.call_tool("prepare_download", {"path": str(root / "a.txt")})
-    assert link.structured_content["url"].startswith("http://127.0.0.1:8765/")
+    assert link.structured_content["url"].startswith("https://fm.example.com/")
+
+
+async def test_network_settings_read_per_request_apply_at_once(root, make_runtime):
+    runtime = make_runtime(make_config([root]))
+    assert not runtime.addressing.accepts_host("fm.example.com")
+    await runtime.apply(
+        changed(
+            make_config([root]),
+            server__public_base_url="https://fm.example.com",
+            server__allowed_hosts=["fm.example.com"],
+            server__allowed_origins=["https://fm.example.com"],
+        )
+    )
+    assert runtime.addressing.accepts_host("fm.example.com")
+    assert runtime.addressing.mcp_url == "https://fm.example.com/mcp"
+    assert runtime.config.server.allowed_origins == ["https://fm.example.com"]
+
+
+def test_request_restart_stops_the_servers(root, make_runtime):
+    runtime = make_runtime(make_config([root]))
+    stopped = []
+    runtime.stop_servers = lambda: stopped.append(True)
+    runtime.request_restart()
+    assert runtime.restart_requested and stopped == [True]
 
 
 async def test_apply_sends_no_list_changed_notification(root, make_runtime):

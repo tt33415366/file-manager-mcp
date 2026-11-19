@@ -70,6 +70,7 @@ def build_ui_app(runtime: Runtime, key: str, port: int) -> Callable:
         running = config_to_dict(runtime.config)
         body["running"] = {section: running[section] for section in RESTART_SECTIONS}
         body["restart_fields"] = list(RESTART_FIELDS)
+        body["launch"] = runtime.launch_id
         return JSONResponse(body)
 
     async def put_config(request: Request) -> Response:
@@ -82,6 +83,10 @@ def build_ui_app(runtime: Runtime, key: str, port: int) -> Callable:
         async with save_lock:
             _write_atomic(config_path, dump_config(cfg))
             return JSONResponse(await runtime.apply(cfg))
+
+    async def restart(_request: Request) -> Response:
+        runtime.request_restart()
+        return JSONResponse({"restarting": True})
 
     async def check_dir(request: Request) -> Response:
         return JSONResponse({"exists": os.path.isdir(request.query_params.get("path", ""))})
@@ -121,6 +126,7 @@ def build_ui_app(runtime: Runtime, key: str, port: int) -> Callable:
             Route("/api/setup", get_setup, methods=["GET"]),
             Route("/api/config", get_config, methods=["GET"]),
             Route("/api/config", put_config, methods=["PUT"]),
+            Route("/api/restart", restart, methods=["POST"]),
             Route("/api/check-dir", check_dir),
             Route("/api/tokens", list_tokens, methods=["GET"]),
             Route("/api/tokens", add_token, methods=["POST"]),
